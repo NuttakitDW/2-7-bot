@@ -1,0 +1,9 @@
+# Secrets
+.env
+
+# Build output
+bin/
+target/
+
+# Upstream engine checkout (bootstrapped by `make engine`)
+third_party/
