@@ -23,6 +23,7 @@ See "The bot" below before changing it.
 | What do we call our bots, and when is it a new one? | `docs/naming.md` |
 | What are the rules of `27td-fl`? | `docs/game/rules.md` |
 | How do I read a match report without fooling myself? | `docs/game/measurement.md` |
+| What has the bot been benchmarked against, and when? | `docs/game/benchmarks/` |
 
 A working reference bot is vendored at `docs/protocol/examples/bot.py`.
 
