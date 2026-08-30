@@ -31,15 +31,18 @@ Raw engine reports are recorded next to this file
 
 ## Results
 
-All rates are h1's, in BB/100 with CI95 half-width, on paired duplicate
-observations. `faults: 0` and `forfeited_by: null` in every match.
+All rates are h1's, in **big bets per 100 hands** (1 BB = 2 big blinds =
+200 chips — the platform's fixed-limit convention, `../../arena/games.md`;
+the engine's raw `chips_per100` is divided by 200), CI95 half-width, on
+paired duplicate observations. `faults: 0` and `forfeited_by: null` in
+every match.
 
 | opponent | h1 BB/100 | CI95 | h1 vpip | h1 fold | h1 wtsd | h1 wsd |
 |---|---|---|---|---|---|---|
-| `builtin:folder` | `+37.15` | `±0.23` | 0.248 | 0.252 | — | — |
-| `builtin:random:1` | `+104.49` | `±1.52` | 0.453 | 0.425 | 0.153 | 0.833 |
-| `builtin:caller` | `+151.55` | `±1.13` | 0.556 | 0.252 | 0.748 | 0.769 |
-| `builtin:shover` | `+256.38` | `±4.18` | 0.556 | 0.740 | 0.260 | 0.993 |
+| `builtin:folder` | `+18.58` | `±0.12` | 0.248 | 0.252 | — | — |
+| `builtin:random:1` | `+52.25` | `±0.76` | 0.453 | 0.425 | 0.153 | 0.833 |
+| `builtin:caller` | `+75.78` | `±0.56` | 0.556 | 0.252 | 0.748 | 0.769 |
+| `builtin:shover` | `+128.19` | `±2.09` | 0.556 | 0.740 | 0.260 | 0.993 |
 
 Decision latency (h1):
 
@@ -63,7 +66,7 @@ Decision latency (h1):
 - **The button open range is measurably tight.** Against folder, h1 opens
   only ~50% of its buttons (vpip 0.248 across all hands, all of it raises)
   and open-folds the rest. The always-open ceiling against folder is
-  75 BB/100; h1 collects 37.15. Roughly half the available steal EV is
+  37.5 BB/100; h1 collects 18.58. Roughly half the available steal EV is
   unclaimed. This is the fixed chart, not a bug — h1 has no opponent model
   and no notion that the blinds are dead money against this opponent.
 - **Latency is comfortable but not frontier.** Mean 35–84µs against the
@@ -76,7 +79,9 @@ Decision latency (h1):
   clears them with CIs a hundred times smaller than the edges. **Nothing
   further can be learned locally from builtins.** The next measurable rung
   is hosted: `swit-27td-1.0` (competent play, 10k hands), then the tuned
-  blueprints. These numbers are the baseline to hold while changing the
+  blueprints — run the same day, see
+  [2026-08-30-h1-hosted-ladder.md](2026-08-30-h1-hosted-ladder.md): h1
+  loses to every real rival by ~12–16 BB/100. These numbers are the baseline to hold while changing the
   policy — any regression against this table at seed 1 is a real
   regression.
 
@@ -146,5 +151,5 @@ is a **new bot name** (h2, or a different scheme), not a re-upload of h1.
 
 The honest summary: h1's floor is solid — legal everywhere, value-sound,
 fast. Its two designed-in gaps (no bluffs, no adaptation) are now visible
-as numbers: ~38 BB/100 left against folder, a pure-value showdown profile.
+as numbers: ~19 BB/100 left against folder, a pure-value showdown profile.
 The next generation should pick one gap and close it under a new name.
