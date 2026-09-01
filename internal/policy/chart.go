@@ -2,14 +2,22 @@
 // and a betting rule, each a fixed sequence of comparisons rather than a
 // search.
 //
-// Nothing here mixes and nothing here bluffs. Both omissions are deliberate:
-// h1's purpose is to be a correct, readable floor — an actual hand ranking and
-// an actual draw rule — not a contender. Being deterministic makes it fully
-// exploitable by anything that models it, which is the price paid for being
-// legible. See draw.go on the missing snow.
+// h2's one change over h1 is the chart's Open and Defend columns, which are
+// generated from equity rollouts (cmd/chartgen) instead of hand-tuned —
+// the 2026-08-30 benchmarks measured h1's tight chart as its dominant leak,
+// ~12 BB/100 to every hosted rival. The shapes, keeps, draw rule and
+// betting rule are h1's, unchanged.
+//
+// Nothing here mixes and nothing here bluffs, still. Being deterministic
+// makes the bot fully exploitable by anything that models it — a measured
+// ~3 BB/100 against the tuned blueprint — and closing that is a later
+// generation's change, not this one's. See draw.go on the missing snow.
 package policy
 
-import "github.com/nuttakit/2-7-bot/internal/cards"
+import (
+	"github.com/nuttakit/2-7-bot/internal/cards"
+	"github.com/nuttakit/2-7-bot/internal/handclass"
+)
 
 // Move is what to do with a hand before the first draw.
 type Move uint8
@@ -65,24 +73,20 @@ type Chart struct {
 
 // Classify reads a five-card hand against the range chart.
 //
-// The thresholds are ported from this repo's previous bot
-// (`git show 2131e7c:strategy.go`), which is where they were first written
-// down. They are **untuned heuristics, not computed equities** — nothing in
-// this repo derives them, and no measurement says they are right. What they
-// encode is three structural facts about the game (docs/game/rules.md):
-// eight-or-better is the useful drawing objective, a nine low beats any
-// straight so straight-shaped draws are traps, and the ace is always high so
-// A-5-4-3-2 is a bad hand rather than a wheel.
+// The shape ladder and keep lists below are structural: they encode three
+// facts about the game (docs/game/rules.md) — eight-or-better is the useful
+// drawing objective, a nine low beats any straight so straight-shaped draws
+// are traps, and the ace is always high so A-5-4-3-2 is a bad hand rather
+// than a wheel. They are unchanged from h1, and the draw rule depends on
+// them.
 //
-// Note what the code actually does, which is wider than any published human
-// guidance: the two-card branch opens *any* three distinct cards eight or
-// under except the runs 4-5-6, 5-6-7 and 6-7-8, and does not require a deuce.
-// Replacing these rows with numbers from exhaustive one-draw enumeration is
-// the cheapest real improvement available here.
-//
-// The old version precomputed all 7,462 rank classes into a map. That is not
-// needed: this runs in a few hundred nanoseconds against a budget measured in
-// hundreds of microseconds, and reading it beats reading a table builder.
+// The Open and Defend columns are h2's change: they come from the generated
+// chartTable (cmd/chartgen), which cuts an equity-rollout ranking of all
+// predraw hand classes at frequencies derived from pot odds and a
+// fixed-point iteration of each range against the other. Which hands to
+// play is a measured number; only *how* to defend — three-bet or flat —
+// keeps h1's structural rule, because the table stores a continue bit, not
+// a sizing.
 func Classify(hand []cards.Card) Chart {
 	distinct := cards.DistinctRanks(hand)
 	low7 := atMost(distinct, cards.Seven)
@@ -126,27 +130,50 @@ func Classify(hand []cards.Card) Chart {
 		keepTwo = distinct[:2]
 	}
 
+	open, defends := tableMoves(hand)
 	switch {
 	case pat:
-		return Chart{Shape: Pat, Keep: distinct, Open: Raise, Defend: defendWith(smoothPat)}
+		return Chart{Shape: Pat, Keep: distinct, Open: open, Defend: defendWith(defends, smoothPat)}
 	case keepFour != nil:
-		return Chart{Shape: OneCardDraw, Keep: keepFour, Open: Raise, Defend: defendWith(strongDraw)}
+		return Chart{Shape: OneCardDraw, Keep: keepFour, Open: open, Defend: defendWith(defends, strongDraw)}
 	case keepThree != nil:
-		return Chart{Shape: TwoCardDraw, Keep: keepThree, Open: Raise,
-			Defend: defendWith(keepThree[0] == cards.Two)}
+		return Chart{Shape: TwoCardDraw, Keep: keepThree, Open: open,
+			Defend: defendWith(defends, keepThree[0] == cards.Two)}
 	case keepTwo != nil:
-		return Chart{Shape: ThreeCardDraw, Keep: keepTwo, Open: Raise, Defend: Call}
+		return Chart{Shape: ThreeCardDraw, Keep: keepTwo, Open: open, Defend: defendWith(defends, false)}
 	default:
-		return Chart{Shape: Junk, Keep: salvageKeep(distinct), Open: Fold, Defend: Fold}
+		return Chart{Shape: Junk, Keep: salvageKeep(distinct), Open: open, Defend: defendWith(defends, false)}
 	}
 }
 
-// defendWith three-bets the top of each category and calls with the rest.
-func defendWith(strong bool) Move {
-	if strong {
-		return Raise
+// tableMoves reads the generated chart: whether this hand opens the button,
+// and whether it continues from the big blind.
+func tableMoves(hand []cards.Card) (open Move, defends bool) {
+	entry := chartTable[handclass.Of(hand)]
+	open = Fold
+	if entry&chartOpenBit != 0 {
+		open = Raise
 	}
-	return Call
+	return open, entry&chartDefendBit != 0
+}
+
+// The chartTable bit layout, shared with cmd/chartgen.
+const (
+	chartOpenBit   = 1
+	chartDefendBit = 2
+)
+
+// defendWith folds outside the defending range, three-bets the structural
+// top of it — h1's rule, unchanged — and flats the rest.
+func defendWith(defends, strong bool) Move {
+	switch {
+	case !defends:
+		return Fold
+	case strong:
+		return Raise
+	default:
+		return Call
+	}
 }
 
 // DrawingKeep is the best set of ranks to keep when we are drawing rather

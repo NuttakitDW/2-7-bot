@@ -32,7 +32,7 @@ bot:
 
 # The upload artifact. One static Linux x86-64 ELF, named for the bot
 # (docs/naming.md) because `arena upload --name` defaults to the filename.
-BOT_NAME ?= nutt-27td-fl-hu-h1
+BOT_NAME ?= nutt-27td-fl-hu-h2
 
 bot-release:
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/nuttakit/2-7-bot/internal/cards"
+	"github.com/nuttakit/2-7-bot/internal/handclass"
 	"github.com/nuttakit/2-7-bot/internal/table"
 	"github.com/nuttakit/2-7-bot/internal/wire"
 )
@@ -76,53 +77,49 @@ func ranks(list []cards.Rank) string {
 	return strings.Join(out, "")
 }
 
-// The predraw range chart. Cases are chosen to pin down what a naive "keep the
-// lowest cards" rule gets wrong: straight shapes, flush shapes, pairs, and the
-// deuce.
+// The structural half of the chart: shapes and keep lists. Cases are chosen
+// to pin down what a naive "keep the lowest cards" rule gets wrong: straight
+// shapes, flush shapes, pairs, and the deuce. The Open and Defend columns
+// are generated data and are tested by property below, not by case.
 func TestClassify(t *testing.T) {
 	tests := []struct {
-		name   string
-		hand   string
-		shape  Shape
-		keep   string
-		open   Move
-		defend Move
+		name  string
+		hand  string
+		shape Shape
+		keep  string
 	}{
-		{"the nuts stand pat and three-bet", "7c5d4h3s2c", Pat, "23457", Raise, Raise},
-		{"a made eight stands pat", "8c5d4h3s2c", Pat, "23458", Raise, Raise},
-		{"a rough nine is pat but only calls", "9c8d7h5s2c", Pat, "25789", Raise, Call},
-		{"a smooth nine three-bets", "9c6d4h3s2c", Pat, "23469", Raise, Raise},
+		{"the nuts stand pat", "7c5d4h3s2c", Pat, "23457"},
+		{"a made eight stands pat", "8c5d4h3s2c", Pat, "23458"},
+		{"a rough nine is pat", "9c8d7h5s2c", Pat, "25789"},
 
-		{"four low cards draw one", "2c3d4h7sKc", OneCardDraw, "2347", Raise, Raise},
+		{"four low cards draw one", "2c3d4h7sKc", OneCardDraw, "2347"},
 		// A nine low is a made hand; A-9-4-3-2 is not. The nine is above
 		// the eight-or-better target, so it goes with the ace and the
 		// hand draws two rather than one.
-		{"an ace-high hand draws two rather than one", "Ac9d4h3s2c", TwoCardDraw, "234", Raise, Raise},
+		{"an ace-high hand draws two rather than one", "Ac9d4h3s2c", TwoCardDraw, "234"},
 
 		// Straights lose to any nine low, so a four-card run that two
 		// ranks complete is not a draw worth taking.
-		{"an open-ended four-straight is not a one-card draw", "3c4d5h6sKc", TwoCardDraw, "345", Raise, Call},
+		{"an open-ended four-straight is not a one-card draw", "3c4d5h6sKc", TwoCardDraw, "345"},
 		// 2-3-4-5 is only a one-ender: a six makes the straight, a seven
 		// makes the nuts. It stays a one-card draw.
-		// It still only calls: the three-betting category is a clean
-		// eight-low draw, and this one can make a straight.
-		{"2345 is a one-ender and still draws one", "2c3d4h5sKc", OneCardDraw, "2345", Raise, Call},
+		{"2345 is a one-ender and still draws one", "2c3d4h5sKc", OneCardDraw, "2345"},
 		// The same hand suited is a made six-high straight flush shape;
 		// breaking it is right, and the straight is what forbids standing.
-		{"a six-high straight is broken back to a one-card draw", "2c3d4h5s6c", OneCardDraw, "2345", Raise, Call},
-		{"a flush is broken back to a one-card draw", "7c5c4c3c2c", OneCardDraw, "2345", Raise, Call},
+		{"a six-high straight is broken back to a one-card draw", "2c3d4h5s6c", OneCardDraw, "2345"},
+		{"a flush is broken back to a one-card draw", "7c5c4c3c2c", OneCardDraw, "2345"},
 
 		// Pairs are dead weight: the second copy of a rank can never
 		// contribute to a low.
-		{"a pair leaves a four-card draw behind it", "2c2d4h5s7c", OneCardDraw, "2457", Raise, Raise},
+		{"a pair leaves a four-card draw behind it", "2c2d4h5s7c", OneCardDraw, "2457"},
 
 		// 4-5-6, 5-6-7 and 6-7-8 are the shapes that make unwanted
 		// straights from both ends, and no deuce means no draw to the
 		// nuts either. The salvage keep must not hand the same shape
 		// back, so it keeps two cards rather than three.
-		{"a middle three-straight is not a draw at all", "5c6d7hKsQc", Junk, "56", Fold, Fold},
-		{"a deuce and a low card draw three", "2c7dKhQsJc", ThreeCardDraw, "27", Raise, Call},
-		{"no deuce and no low cards is junk", "AcKdQhJs9c", Junk, "9", Fold, Fold},
+		{"a middle three-straight is not a draw at all", "5c6d7hKsQc", Junk, "56"},
+		{"a deuce and a low card draw three", "2c7dKhQsJc", ThreeCardDraw, "27"},
+		{"no deuce and no low cards is junk", "AcKdQhJs9c", Junk, "9"},
 	}
 
 	for _, test := range tests {
@@ -134,13 +131,71 @@ func TestClassify(t *testing.T) {
 			if test.keep != "" && ranks(chart.Keep) != test.keep {
 				t.Errorf("keep = %q, want %q", ranks(chart.Keep), test.keep)
 			}
-			if chart.Open != test.open {
-				t.Errorf("open = %v, want %v", chart.Open, test.open)
-			}
-			if chart.Defend != test.defend {
-				t.Errorf("defend = %v, want %v", chart.Defend, test.defend)
+		})
+	}
+}
+
+// The structural three-bet rule survives the generated table: the top of
+// the defending range raises, the rest flats. These hands sit far enough up
+// any candidate table's ranking that their continue bit is not in question.
+func TestDefendKeepsTheStructuralThreeBet(t *testing.T) {
+	tests := []struct {
+		name   string
+		hand   string
+		defend Move
+	}{
+		{"the nuts three-bet", "7c5d4h3s2c", Raise},
+		{"a smooth nine three-bets", "9c6d4h3s2c", Raise},
+		{"a clean one-card draw three-bets", "2c3d4h7sKc", Raise},
+		{"a rough nine flats rather than three-betting", "9c8d7h5s2c", Call},
+		{"a straight-risk one-card draw flats", "2c3d4h5sKc", Call},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := Classify(parseHand(t, test.hand)).Defend; got != test.defend {
+				t.Errorf("defend = %v, want %v", got, test.defend)
 			}
 		})
+	}
+}
+
+// The properties any generated table must satisfy, whatever realization
+// factor produced it. The 2026-08-30 benchmarks measured h1's ~50% button
+// open as its dominant leak, so a candidate that is not clearly wider than
+// that is a generation bug, not a strategy choice.
+func TestChartTableProperties(t *testing.T) {
+	openWeight, defendWeight, total := 0.0, 0.0, 0.0
+	for id := handclass.ID(0); id < handclass.Num; id++ {
+		weight := float64(handclass.Weight(id))
+		if weight == 0 {
+			continue
+		}
+		chart := Classify(handclass.Representative(id))
+		if chart.Open == Raise {
+			openWeight += weight
+		}
+		if chart.Defend != Fold {
+			defendWeight += weight
+		}
+		total += weight
+	}
+
+	if frac := openWeight / total; frac < 0.55 {
+		t.Errorf("button opens %.1f%% of deals, want clearly wider than h1's ~50%%", 100*frac)
+	}
+	if frac := defendWeight / total; frac < 0.30 {
+		t.Errorf("big blind defends %.1f%% of deals, want at least 30%%", 100*frac)
+	}
+
+	if chart := Classify(parseHand(t, "7c5d4h3s2c")); chart.Open != Raise {
+		t.Error("the nuts must open")
+	}
+	// The bottom of the deck folds the button — but it may defend the big
+	// blind. The 2026-09-01 candidate sweep measured the defend-everything
+	// shape as the winner (getting 3:1 closing odds, with the postdraw
+	// rules capping the damage), so no floor is asserted on defends here.
+	if chart := Classify(parseHand(t, "AcAdKhKsQc")); chart.Open != Fold {
+		t.Error("aces up — the bottom of the deck — must fold the button")
 	}
 }
 
@@ -218,17 +273,20 @@ func TestPredrawUsesTheRightColumn(t *testing.T) {
 	}{
 		{"the button opens its range rather than limping",
 			spot{seat: 0, hole: "2c3d4h7sKc"}, facingBlind, wire.ActionRaise},
-		{"the button folds outside its range",
-			spot{seat: 0, hole: "AcKdQhJs9c"}, facingBlind, wire.ActionFold},
+		{"the button folds the bottom of the deck",
+			spot{seat: 0, hole: "AcAdKhKsQc"}, facingBlind, wire.ActionFold},
 		{"the big blind three-bets its strongest defends",
 			spot{seat: 1, hole: "7c5d4h3s2c", oppWagers: 1}, facingRaise, wire.ActionRaise},
 		{"the big blind calls a rough pat nine rather than three-betting",
 			spot{seat: 1, hole: "9c8d7h5s2c", oppWagers: 1}, facingRaise, wire.ActionCall},
-		{"the big blind folds junk to a raise",
-			spot{seat: 1, hole: "AcKdQhJs9c", oppWagers: 1}, facingRaise, wire.ActionFold},
+		// The generated chart defends the whole big blind at 3:1 closing
+		// odds — measured as the winning shape in the 2026-09-01 sweep —
+		// so even the bottom of the deck calls rather than folds here.
+		{"the big blind defends even the bottom of the deck",
+			spot{seat: 1, hole: "AcAdKhKsQc", oppWagers: 1}, facingRaise, wire.ActionCall},
 		// Folding for free is never legal, so junk with the option checks.
-		{"the big blind checks its option with junk",
-			spot{seat: 1, hole: "AcKdQhJs9c"}, bigBlindOption, wire.ActionCheck},
+		{"the big blind checks its option with the bottom of the deck",
+			spot{seat: 1, hole: "AcAdKhKsQc"}, bigBlindOption, wire.ActionCheck},
 	}
 
 	for _, test := range tests {

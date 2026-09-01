@@ -55,8 +55,15 @@ func Draw(hand *table.Hand) []cards.Card {
 		return nil // nothing to reason about; stand pat rather than guess
 	}
 	opponentDrew, _, known := hand.OpponentDraw(hand.Street)
-	if hand.Category() >= standPatFloor(opponentDrew, known) {
+	return DrawDiscards(hand.Cards, opponentDrew, known)
+}
+
+// DrawDiscards is the draw rule as a pure function of the visible facts —
+// our five cards and the opponent's most recent draw count. Exported so the
+// equity rollouts can replay both seats' draws through the identical rule.
+func DrawDiscards(hand []cards.Card, opponentDrew int, known bool) []cards.Card {
+	if deuce.Categorize(hand) >= standPatFloor(opponentDrew, known) {
 		return nil
 	}
-	return Discards(hand.Cards, DrawingKeep(hand.Cards))
+	return Discards(hand, DrawingKeep(hand))
 }

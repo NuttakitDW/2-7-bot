@@ -7,7 +7,7 @@
 //
 // Build for upload with:
 //
-//	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bin/nutt-27td-fl-hu-h1 ./cmd/bot
+//	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bin/nutt-27td-fl-hu-h2 ./cmd/bot
 //
 // The artifact filename is the bot name (docs/naming.md).
 package main
