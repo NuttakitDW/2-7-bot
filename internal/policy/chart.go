@@ -2,11 +2,13 @@
 // and a betting rule, each a fixed sequence of comparisons rather than a
 // search.
 //
-// h2's one change over h1 is the chart's Open and Defend columns, which are
-// generated from equity rollouts (cmd/chartgen) instead of hand-tuned —
-// the 2026-08-30 benchmarks measured h1's tight chart as its dominant leak,
-// ~12 BB/100 to every hosted rival. The shapes, keeps, draw rule and
-// betting rule are h1's, unchanged.
+// h2's change over h1 was the chart's Open and Defend columns, generated
+// from equity rollouts (cmd/chartgen) instead of hand-tuned. h3's one
+// change over h2 is the draw rule: a generated table (cmd/drawgen) keyed
+// by hand class and street × read context replaces h1's three-row
+// standPatFloor, which survives only as the fallback for undecided cells
+// (see draw.go and the 2026-09-01 h3 selection benchmark). The shapes,
+// keeps and betting rules are h1's, unchanged.
 //
 // Nothing here mixes and nothing here bluffs, still. Being deterministic
 // makes the bot fully exploitable by anything that models it — a measured

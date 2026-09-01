@@ -199,8 +199,13 @@ func TestChartTableProperties(t *testing.T) {
 	}
 }
 
-// The break rule — the one decision in h1 that reads the opponent's public
-// draw count rather than just its own cards.
+// The draw rule through the generated table, read at the button on the
+// second draw — the fresh-read contexts. The structural rows are fixed
+// points of any sane table; the nine and ten rows pin what the measurement
+// decided, and two of them reverse h1's believed rule: a nine no longer
+// breaks into a one-card draw at this depth, and a rough ten no longer
+// stands on a three-card read. Cells the two 20M-deal generations disagreed
+// on — measured coin flips — are deliberately not pinned.
 func TestDrawUsesTheOpponentsDrawCount(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -213,14 +218,13 @@ func TestDrawUsesTheOpponentsDrawCount(t *testing.T) {
 		{name: "a seven stands pat against a pat opponent", hole: "7c5d4h3s2c", oppDrew: 0, wantPat: true},
 		{name: "an eight stands pat against a one-card draw", hole: "8c5d4h3s2c", oppDrew: 1, wantPat: true},
 
-		// The rule itself, in both directions.
 		{name: "a nine stands pat against a two-card draw", hole: "9c8d7h5s2c", oppDrew: 2, wantPat: true},
-		{name: "a nine breaks against a one-card draw", hole: "9c8d7h5s2c", oppDrew: 1, wantDrop: "9c"},
-		{name: "a nine breaks against a pat opponent", hole: "9c8d7h5s2c", oppDrew: 0, wantDrop: "9c"},
+		{name: "a nine stands pat against a one-card draw", hole: "9c8d7h5s2c", oppDrew: 1, wantPat: true},
 		{name: "a nine stands pat with no read yet", hole: "9c8d7h5s2c", noRead: true, wantPat: true},
 
-		// A ten is only worth standing on when the opponent is far behind.
-		{name: "a ten stands pat against a three-card draw", hole: "Tc8d7h5s2c", oppDrew: 3, wantPat: true},
+		// A rough ten with a draw still to come breaks whatever the read —
+		// its break keep 2-5-7-8 is one card from beating every ten.
+		{name: "a ten breaks against a three-card draw", hole: "Tc8d7h5s2c", oppDrew: 3, wantDrop: "Tc"},
 		{name: "a ten breaks against a one-card draw", hole: "Tc8d7h5s2c", oppDrew: 1, wantDrop: "Tc"},
 		{name: "a ten breaks with no read yet", hole: "Tc8d7h5s2c", noRead: true, wantDrop: "Tc"},
 

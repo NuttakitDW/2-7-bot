@@ -90,6 +90,14 @@ func continues(hand *table.Hand, category deuce.Category) bool {
 		return !(hand.FacingRaise() && hand.Street >= table.Draw2)
 	}
 	// Not made. The only reason to pay is a draw we still get to take.
+	//
+	// Deliberately the structural DrawingKeep, not the generated draw
+	// table: h3 changed the draw rule and nothing else, so its betting is
+	// bit-identical to h2's and a match delta measures the draws alone —
+	// the isolation the h2 selection report proved out. The price is a
+	// known incoherence (the table may keep four where this reasons about
+	// three); pricing defends and continues together against the table is
+	// h4's change, not a drive-by edit here.
 	switch hand.Street {
 	case table.Draw1:
 		// Two draws left, small bets: a one- or two-card draw continues.

@@ -20,6 +20,7 @@ import (
 	"github.com/nuttakit/2-7-bot/internal/deuce"
 	"github.com/nuttakit/2-7-bot/internal/handclass"
 	"github.com/nuttakit/2-7-bot/internal/policy"
+	"github.com/nuttakit/2-7-bot/internal/table"
 )
 
 // Accept restricts the villain's dealt hands to a range of classes. A nil
@@ -81,11 +82,13 @@ func playout(d *dealer, hero, villain []cards.Card, heroOnButton bool) float64 {
 	// The big blind's read is always one street stale; on the first draw
 	// there is no read at all (table.Hand.OpponentDraw documents why).
 	buttonDrew, known := 0, false
-	for street := 0; street < 3; street++ {
-		bbDiscards := policy.DrawDiscards(bb, buttonDrew, known)
+	for street := table.Draw1; street <= table.Draw3; street++ {
+		bbDiscards := policy.DrawDiscards(bb, street,
+			policy.Read{Count: buttonDrew, StreetsAgo: 1, Known: known})
 		replace(bb, bbDiscards, d)
 
-		btnDiscards := policy.DrawDiscards(button, len(bbDiscards), true)
+		btnDiscards := policy.DrawDiscards(button, street,
+			policy.Read{Count: len(bbDiscards), StreetsAgo: 0, Known: true})
 		replace(button, btnDiscards, d)
 		buttonDrew, known = len(btnDiscards), true
 	}
