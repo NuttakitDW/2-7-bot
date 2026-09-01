@@ -5,10 +5,18 @@ bot competition platform. Target game: **`27td-fl`** (2-7 triple draw, fixed
 limit).
 
 **Current state: harness plus one bot.** `cmd/arena` drives the platform;
-`cmd/bot` plays `27td-fl`. The bot is **`nutt-27td-fl-hu-h1`** — heads-up,
-heuristic, generation 1 — and it is a deliberate floor rather than an attempt
-at the frontier: a real evaluator, a real draw rule, no bluffing and no mixing.
-See "The bot" below before changing it.
+`cmd/bot` plays `27td-fl` — heads-up, heuristic, one generation per retune.
+
+**This file does not name the current generation, on purpose.** Two places
+do, and they are the only ones to trust:
+
+- **which bot `cmd/bot` builds as** — `BOT_NAME` in the `Makefile`, the same
+  value `make bot-release` names the artifact after;
+- **how it actually plays** — the newest dated file in
+  `docs/game/benchmarks/`, which is also where the reasoning behind the
+  current generation's design lives.
+
+Read both before changing strategy, then "The bot" below.
 
 ## The contract is already written down — read it, don't rediscover it
 
@@ -23,6 +31,7 @@ See "The bot" below before changing it.
 | What do we call our bots, and when is it a new one? | `docs/naming.md` |
 | What are the rules of `27td-fl`? | `docs/game/rules.md` |
 | How do I read a match report without fooling myself? | `docs/game/measurement.md` |
+| Which bot is current, and how does it play? | `Makefile` (`BOT_NAME`), newest file in `docs/game/benchmarks/` |
 | What has the bot been benchmarked against, and when? | `docs/game/benchmarks/` |
 
 A working reference bot is vendored at `docs/protocol/examples/bot.py`.
@@ -85,7 +94,10 @@ internal/deuce/   the 2-7 evaluator, in the engine's frozen encoding
 internal/wire/    the JSON-Lines protocol, plus Legalize
 internal/table/   hand state rebuilt from the event stream
 internal/policy/  the strategy: policy.go is the entry point, then
-                  chart.go (ranges), draw.go (discards), bet.go (wagers)
+                  chart.go (ranges), draw.go (discards), bet.go (wagers),
+                  plus whatever generated tables the current generation ships
+cmd/chartgen/     generators for those tables; they are committed output,
+cmd/drawgen/      not run at build time
 ```
 
 - **The policy only proposes; `wire.Legalize` decides.** Every action passes
@@ -97,10 +109,15 @@ internal/policy/  the strategy: policy.go is the entry point, then
   it exhaustively over all 2,598,960 five-card hands. It also matched 122,204
   showdowns in a local 300,000-hand spar log on 2026-08-22 — that log was never
   committed, so that half is a dated observation, not a check.
-- **h1 does not bluff and does not mix.** Both omissions are deliberate and
+- **No generation bluffs or mixes yet.** Both omissions are deliberate and
   both are documented at the point they would go — snowing in `draw.go`,
-  determinism in `chart.go`. Being deterministic is what makes h1 fully
+  determinism in `chart.go`. Determinism is what makes the bot fully
   exploitable by anything that models it; that is the price of being legible.
+  A generation that adds either says so at those two sites.
+- **Selection needs an adversarial judge.** Tuning against our own previous
+  bot selects for exploiting its passivity and does not transfer to the
+  field; the h2 ladder report is the worked example. Keep a pressure
+  opponent as a hard gate.
 - Retuning any threshold means a **new name**, not a new version
   (`docs/naming.md`).
 
