@@ -32,7 +32,7 @@ bot:
 
 # The upload artifact. One static Linux x86-64 ELF, named for the bot
 # (docs/naming.md) because `arena upload --name` defaults to the filename.
-BOT_NAME ?= nutt-27td-fl-hu-h3
+BOT_NAME ?= 2-7-lapis-2
 
 bot-release:
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
@@ -61,3 +61,9 @@ spar: engine bot
 	  --bot 'baseline@builtin:random' \
 	  --timeout-ms 1000 \
 	  --output json
+
+# Reproduce the targeted blueprint; generated strategy data stays local.
+.PHONY: blueprint
+blueprint:
+	go run ./cmd/cfrgen train -model cobalt -weight 1 -iters 100000 \
+	  -workers 1 -seed 1 -minvisits 20 -out internal/lapis/blueprint.bin.gz

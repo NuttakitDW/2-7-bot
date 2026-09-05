@@ -7,7 +7,7 @@
 //
 // Build for upload with:
 //
-//	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bin/nutt-27td-fl-hu-h2 ./cmd/bot
+//	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bin/2-7-lapis-2 ./cmd/bot
 //
 // The artifact filename is the bot name (docs/naming.md).
 package main
@@ -19,8 +19,7 @@ import (
 	"io"
 	"os"
 
-	"github.com/nuttakit/2-7-bot/internal/policy"
-	"github.com/nuttakit/2-7-bot/internal/table"
+	"github.com/nuttakit/2-7-bot/internal/lapis"
 	"github.com/nuttakit/2-7-bot/internal/wire"
 )
 
@@ -41,7 +40,10 @@ func main() {
 
 // run reads arena messages until match-end or EOF.
 func run(input io.Reader, output io.Writer, debug io.Writer) error {
-	state := table.New()
+	bot, err := lapis.New()
+	if err != nil {
+		return err
+	}
 	replies := bufio.NewWriter(output)
 
 	lines := bufio.NewScanner(input)
@@ -63,28 +65,29 @@ func run(input io.Reader, output io.Writer, debug io.Writer) error {
 
 		switch msg.Type {
 		case wire.MsgHello:
-			state.Hello(msg)
+			bot.Hello(msg)
 			fmt.Fprintf(debug, "hello: %s, %d seats, timeout %dms\n",
-				msg.GameID, msg.SeatCount, state.Match.TimeoutMs)
+				msg.GameID, msg.SeatCount, bot.Table.Match.TimeoutMs)
 			if err := send(replies, wire.Join()); err != nil {
 				return err
 			}
 
 		case wire.MsgHandStart:
-			state.HandStart(msg)
+			bot.HandStart(msg)
 
 		case wire.MsgEvent:
-			state.Observe(msg.Event)
+			bot.Observe(msg.Event)
 
 		case wire.MsgAct:
-			action := policy.Decide(state, msg.Decision)
-			fmt.Fprintf(debug, "hand %d street %s: %v -> %s\n",
-				state.Hand.No, state.Hand.Label, state.Hand.Cards, action.Kind)
+			action := bot.Decide(msg.Decision)
+			fmt.Fprintf(debug, "hand %d street %s: %v -> %s (fallbacks %d)\n",
+				bot.Table.Hand.No, bot.Table.Hand.Label, bot.Table.Hand.Cards, action.Kind, bot.Fallbacks)
 			if err := send(replies, wire.Reply(action)); err != nil {
 				return err
 			}
 
 		case wire.MsgMatchEnd:
+			fmt.Fprintf(debug, "match end: %d heuristic fallbacks\n", bot.Fallbacks)
 			return nil
 
 		default:

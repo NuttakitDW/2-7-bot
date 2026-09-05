@@ -7,3 +7,6 @@ target/
 
 # Upstream engine checkout (bootstrapped by `make engine`)
 third_party/
+
+# Generated embedded strategy (recreate with make blueprint)
+internal/lapis/blueprint.bin.gz
