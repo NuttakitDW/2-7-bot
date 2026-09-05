@@ -7,7 +7,7 @@
 //
 // Build for upload with:
 //
-//	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bin/nutt-27td-fl-hu-h2 ./cmd/bot
+//	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bin/2-7-cobalt-1 ./cmd/bot
 //
 // The artifact filename is the bot name (docs/naming.md).
 package main
@@ -19,7 +19,7 @@ import (
 	"io"
 	"os"
 
-	"github.com/nuttakit/2-7-bot/internal/policy"
+	"github.com/nuttakit/2-7-bot/internal/astra"
 	"github.com/nuttakit/2-7-bot/internal/table"
 	"github.com/nuttakit/2-7-bot/internal/wire"
 )
@@ -77,7 +77,7 @@ func run(input io.Reader, output io.Writer, debug io.Writer) error {
 			state.Observe(msg.Event)
 
 		case wire.MsgAct:
-			action := policy.Decide(state, msg.Decision)
+			action := astra.Decide(state, msg.Decision)
 			fmt.Fprintf(debug, "hand %d street %s: %v -> %s\n",
 				state.Hand.No, state.Hand.Label, state.Hand.Cards, action.Kind)
 			if err := send(replies, wire.Reply(action)); err != nil {

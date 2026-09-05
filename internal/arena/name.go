@@ -90,6 +90,16 @@ func ParseBotName(name string) (BotName, error) {
 	}
 
 	segments := strings.Split(name, "-")
+	if strings.HasPrefix(name, "2-7-cobalt-") {
+		if len(segments) != 4 {
+			return BotName{}, fmt.Errorf("cobalt names must be 2-7-cobalt-<generation>")
+		}
+		_, generation, err := parseLineage("h" + segments[3])
+		if err != nil {
+			return BotName{}, err
+		}
+		return BotName{Owner: "cobalt", Game: "27td-fl", Seats: "hu", Lineage: LineageHeuristic, Generation: generation}, nil
+	}
 	if segments[0] != BotNameOwner {
 		return BotName{}, fmt.Errorf("bot name %q must start with %q", name, BotNameOwner+"-")
 	}
@@ -149,6 +159,9 @@ func (n BotName) NextGen() BotName {
 
 // String rebuilds the name, so a parse round-trips.
 func (n BotName) String() string {
+	if n.Owner == "cobalt" {
+		return fmt.Sprintf("2-7-cobalt-%d", n.Generation)
+	}
 	segments := []string{n.Owner, n.Game, n.Seats, fmt.Sprintf("%c%d", n.Lineage, n.Generation)}
 	return strings.Join(append(segments, n.Qualifiers...), "-")
 }
