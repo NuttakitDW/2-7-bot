@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"runtime/pprof"
 	"strings"
 	"time"
 
@@ -122,8 +123,19 @@ func train(args []string) error {
 	resume := fs.String("resume", "", "raw table checkpoint to start from")
 	resetAvg := fs.Bool("resetavg", false, "with -resume: drop the accumulated average, keep the regrets")
 	regret := fs.String("regret", "plus", "regret update: plus or vanilla (signed)")
+	cpuProfile := fs.String("cpuprofile", "", "write a CPU profile of the run")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	if *cpuProfile != "" {
+		f, err := os.Create(*cpuProfile)
+		if err != nil {
+			return err
+		}
+		if err := pprof.StartCPUProfile(f); err != nil {
+			return err
+		}
+		defer pprof.StopCPUProfile()
 	}
 
 	if *iters <= 0 || *workers <= 0 || *every <= 0 {

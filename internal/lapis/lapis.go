@@ -43,6 +43,17 @@ type Bot struct {
 	Fallbacks int
 }
 
+// NewGreedy selects the modal blueprint action, matching the onyx-78 draw
+// strategy. This selection is an empirical policy, not an equilibrium claim.
+func NewGreedy() (*Bot, error) {
+	b, err := New()
+	if err != nil {
+		return nil, err
+	}
+	b.player.Greedy = true
+	return b, nil
+}
+
 // New decodes the embedded blueprint. It fails only on a build whose
 // blueprint does not match its tree, which is a bug worth refusing to run.
 func New() (*Bot, error) {

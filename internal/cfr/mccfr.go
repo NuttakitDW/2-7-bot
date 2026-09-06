@@ -79,7 +79,10 @@ func (tr *Trainer) Run(n int64, workers int, seed uint64) {
 		wg.Add(1)
 		go func(w int) {
 			defer wg.Done()
-			worker := &worker{tr: tr, rng: rand.New(rand.NewPCG(seed, uint64(w)))}
+			worker := &worker{tr: tr, rng: rand.New(rand.NewPCG(seed, uint64(w))), model: tr.Model}
+			if m, ok := tr.Model.(memoizer); ok {
+				worker.model = m.WithMemo()
+			}
 			for {
 				tr.mu.RLock()
 				var iteration int64
@@ -102,11 +105,23 @@ func (tr *Trainer) Run(n int64, workers int, seed uint64) {
 }
 
 type worker struct {
-	tr            *Trainer
-	rng           *rand.Rand
-	state         State
+	tr  *Trainer
+	rng *rand.Rand
+	// model is the fixed opponent, with a private prediction cache where
+	// the model offers one.
+	model Model
+	state State
+	// view is reused for every model query so that passing it through the
+	// interface does not allocate; the model consumes it before the walk
+	// continues.
+	view          View
 	averageOnly   bool
 	fixedOpponent bool
+}
+
+// memoizer is a Model that can hand each walker a privately cached copy.
+type memoizer interface {
+	WithMemo() Model
 }
 
 func (w *worker) iterate(t float64) {
@@ -155,8 +170,8 @@ func (w *worker) walkBet(id int32, node *Node, traverser int, t float64) float64
 	if p != traverser {
 		var a int
 		if w.useModel() {
-			view := w.state.View(w.tr.Tree, id, p, w.rng)
-			action, ok := w.tr.Model.Bet(&view)
+			w.view = w.state.View(w.tr.Tree, id, p, w.rng)
+			action, ok := w.model.Bet(&w.view)
 			a = actionIndex(node, action, ok)
 		} else {
 			var sigma [3]float64
@@ -214,8 +229,8 @@ func (w *worker) walkDraw(id int32, node *Node, traverser int, t float64) float6
 
 	if p != traverser {
 		if w.useModel() {
-			view := w.state.View(w.tr.Tree, id, p, w.rng)
-			keep, ok := w.tr.Model.Draw(&view)
+			w.view = w.state.View(w.tr.Tree, id, p, w.rng)
+			keep, ok := w.model.Draw(&w.view)
 			if !ok {
 				keep = info.Keep[0]
 			}

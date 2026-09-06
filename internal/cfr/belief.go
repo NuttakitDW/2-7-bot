@@ -6,6 +6,7 @@ import (
 
 	"github.com/nuttakit/2-7-bot/internal/cards"
 	"github.com/nuttakit/2-7-bot/internal/deuce"
+	"github.com/nuttakit/2-7-bot/internal/handclass"
 )
 
 // OpponentObservation contains public evidence at the time of a decision.
@@ -19,6 +20,8 @@ type OpponentObservation struct {
 type BeliefHand struct {
 	Hand   [5]cards.Card
 	Weight float64
+	// Dead contains hypothetical prior opponent discards, for future draws.
+	Dead cards.Set
 }
 
 type beliefParticle struct {
@@ -85,17 +88,23 @@ func OpponentBelief(m *Empirical, history []OpponentObservation, known cards.Set
 	}
 	for _, obs := range history {
 		total := 0.0
+		// Resampled particles often share private features. The public view is
+		// fixed for this observation, so their model likelihoods are identical.
+		likelihood := make(map[handclass.ID]float64, len(particles))
 		for i := range particles {
 			p := &particles[i]
 			v := obs.View
 			v.Hand = p.Hand
-			prob := 0.0
+			class := handclass.Of(p.Hand[:])
+			prob, cached := likelihood[class]
 			if obs.Draw {
 				if obs.Action < 0 || obs.Action > 5 || v.Street < 1 || v.Street > 3 || p.ptr+obs.Action > p.end {
 					return nil
 				}
-				dist := m.drawProbabilities(&v)
-				prob = .995*dist[obs.Action] + .005/6
+				if !cached {
+					dist := m.drawProbabilities(&v)
+					prob = .995*dist[obs.Action] + .005/6
+				}
 				keep := m.keepForCount(&v, obs.Action)
 				for k := range p.Hand {
 					if keep&(1<<k) == 0 {
@@ -108,9 +117,12 @@ func OpponentBelief(m *Empirical, history []OpponentObservation, known cards.Set
 				if obs.Action < 0 || obs.Action > 2 || v.Street < 0 || v.Street > 3 {
 					return nil
 				}
-				dist := m.betProbabilities(&v)
-				prob = .995*dist[obs.Action] + .005/3
+				if !cached {
+					dist := m.betProbabilities(&v)
+					prob = .995*dist[obs.Action] + .005/3
+				}
 			}
+			likelihood[class] = prob
 			p.Weight *= prob
 			total += p.Weight
 		}
@@ -145,6 +157,7 @@ func OpponentBelief(m *Empirical, history []OpponentObservation, known cards.Set
 	out := make([]BeliefHand, n)
 	for i, p := range particles {
 		out[i] = p.BeliefHand
+		out[i].Dead = cards.NewSet(p.deck[:p.ptr]) &^ cards.NewSet(p.Hand[:])
 	}
 	return out
 }
@@ -154,7 +167,26 @@ func OpponentBelief(m *Empirical, history []OpponentObservation, known cards.Set
 // belief after each hypothetical opponent response. It never chooses a
 // separate hero action for each hidden hand.
 func BestRiverAction(t *Tree, id int32, hero View, belief []BeliefHand, m *Empirical) (int, float64, bool) {
-	if id < 0 || int(id) >= len(t.Nodes) || t.Nodes[id].Kind != KindBet || t.Nodes[id].Street != Draw3 || int(t.Nodes[id].Actor) != hero.Seat || len(belief) == 0 {
+	return solveRiver(t, id, hero, belief, m, true, nil)
+}
+
+// RiverContinuationValue also accepts a river node where the opponent acts
+// first. Future hero decisions still maximize only after averaging hidden hands.
+func RiverContinuationValue(t *Tree, id int32, hero View, belief []BeliefHand, m *Empirical) (float64, bool) {
+	_, ev, ok := solveRiver(t, id, hero, belief, m, false, nil)
+	return ev, ok
+}
+
+type riverPolicyKey struct {
+	node int32
+	hand handclass.ID
+}
+
+// A cache is local to a single root/public draw context. Opponent policy
+// features don't depend on hero's replacement card, so those probabilities
+// can be reused across that root's alternative private hero outcomes.
+func solveRiver(t *Tree, id int32, hero View, belief []BeliefHand, m *Empirical, requireHero bool, cache map[riverPolicyKey][6]float64) (int, float64, bool) {
+	if t == nil || m == nil || hero.Seat < 0 || hero.Seat > 1 || id < 0 || int(id) >= len(t.Nodes) || t.Nodes[id].Kind != KindBet || t.Nodes[id].Street != Draw3 || (requireHero && int(t.Nodes[id].Actor) != hero.Seat) || len(belief) == 0 {
 		return 0, 0, false
 	}
 	winners := make([]int, len(belief))
@@ -217,7 +249,18 @@ func BestRiverAction(t *Tree, id int32, hero View, belief []BeliefHand, m *Empir
 				continue
 			}
 			v.Hand = belief[i].Hand
-			p := m.betProbabilities(&v)
+			var p [6]float64
+			if cache == nil {
+				p = m.betProbabilities(&v)
+			} else {
+				key := riverPolicyKey{nodeID, handclass.Of(v.Hand[:])}
+				var found bool
+				p, found = cache[key]
+				if !found {
+					p = m.betProbabilities(&v)
+					cache[key] = p
+				}
+			}
 			for a, action := range n.Acts {
 				branches[a][i] = w * p[action]
 			}

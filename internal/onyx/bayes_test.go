@@ -14,6 +14,9 @@ func riverTracker(t testing.TB, hero int) (*riverSolver, []cards.Card) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Tests using this tracker install the specific decision model they exercise.
+	s.equilibrium = nil
+	s.priors = nil
 	s.reset()
 	var hand []cards.Card
 	for _, text := range []string{"2c", "3d", "4h", "7s", "9c"} {

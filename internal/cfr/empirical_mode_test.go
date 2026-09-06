@@ -32,3 +32,31 @@ func TestEmpiricalModeSelectsMostLikelyLegalAction(t *testing.T) {
 		t.Fatal("mode wrapper mutated original policy")
 	}
 }
+
+func TestModeBetDeclinesUncertainActions(t *testing.T) {
+	m := &Empirical{Version: 1}
+	m.Betting[0] = []PolicyNode{{Feature: -1, Prob: [6]float64{2, 3, 5}}}
+	v := View{Hand: five("2c", "3d", "4h", "7s", "Kc"), Facing: true, CanRaise: true}
+	if _, ok := m.ModeBet(&v, .75); ok {
+		t.Fatal("accepted a 50 percent action")
+	}
+	if a, ok := m.ModeBet(&v, .5); !ok || a != Aggr {
+		t.Fatalf("most likely action %d %v", a, ok)
+	}
+	v.CanRaise = false
+	if a, ok := m.ModeBet(&v, .55); !ok || a != Pass {
+		t.Fatalf("legal probabilities were not renormalized: %d %v", a, ok)
+	}
+	for _, p := range []float64{-1, 2} {
+		if _, ok := m.ModeBet(&v, p); ok {
+			t.Fatal("accepted invalid threshold")
+		}
+	}
+	m.Betting[0][0].Prob = [6]float64{0, 0, 1}
+	if _, ok := m.ModeBet(&v, .75); ok {
+		t.Fatal("treated zero legal support as confident")
+	}
+	if a, ok := m.ModeBet(&v, 0); !ok || a != Pass {
+		t.Fatal("changed legacy no-support fallback")
+	}
+}

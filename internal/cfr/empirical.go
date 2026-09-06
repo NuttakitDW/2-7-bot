@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"sync/atomic"
+	"unsafe"
 
 	"github.com/nuttakit/2-7-bot/internal/cards"
 	"github.com/nuttakit/2-7-bot/internal/deuce"
@@ -20,6 +22,31 @@ type Empirical struct {
 	// Versions 4 and 5 average leaf distributions from multiple fitted trees.
 	BettingForest [4][][]PolicyNode `json:"betting_forest,omitempty"`
 	DrawingForest [3][][]PolicyNode `json:"drawing_forest,omitempty"`
+
+	memo     *policyMemo
+	compiled *compiledForests
+}
+
+type compiledForests struct {
+	betting [4][]compactTree
+	drawing [3][]compactTree
+}
+
+// compile flattens the fitted forests for prediction. Decoding does it
+// once; a model built in memory gets it on first use.
+func (m *Empirical) compile() *compiledForests {
+	if c := (*compiledForests)(atomic.LoadPointer((*unsafe.Pointer)(unsafe.Pointer(&m.compiled)))); c != nil {
+		return c
+	}
+	c := &compiledForests{}
+	for i := range m.BettingForest {
+		c.betting[i] = compileForest(m.BettingForest[i])
+	}
+	for i := range m.DrawingForest {
+		c.drawing[i] = compileForest(m.DrawingForest[i])
+	}
+	atomic.StorePointer((*unsafe.Pointer)(unsafe.Pointer(&m.compiled)), unsafe.Pointer(c))
+	return c
 }
 
 type PolicyNode struct {
@@ -168,6 +195,7 @@ func DecodeEmpirical(raw []byte) (*Empirical, error) {
 				}
 			}
 		}
+		m.compile()
 		return &m, nil
 	}
 	for _, forest := range m.BettingForest {
@@ -193,10 +221,10 @@ func DecodeEmpirical(raw []byte) (*Empirical, error) {
 	return &m, nil
 }
 
-func predictPolicy(nodes []PolicyNode, x [PolicyFeatureCount]float64) [6]float64 {
+func predictPolicy(nodes []PolicyNode, x *[PolicyFeatureCount]float64) [6]float64 {
 	i := 0
 	for nodes[i].Feature >= 0 {
-		n := nodes[i]
+		n := &nodes[i]
 		if x[n.Feature] <= n.Threshold {
 			i = n.Left
 		} else {
@@ -206,7 +234,7 @@ func predictPolicy(nodes []PolicyNode, x [PolicyFeatureCount]float64) [6]float64
 	return nodes[i].Prob
 }
 
-func predictForest(forest [][]PolicyNode, x [PolicyFeatureCount]float64) [6]float64 {
+func predictForest(forest [][]PolicyNode, x *[PolicyFeatureCount]float64) [6]float64 {
 	var out [6]float64
 	for _, nodes := range forest {
 		p := predictPolicy(nodes, x)
@@ -225,19 +253,33 @@ func predictForest(forest [][]PolicyNode, x [PolicyFeatureCount]float64) [6]floa
 }
 
 func (m *Empirical) predictBet(v *View) [6]float64 {
+	if m.memo != nil {
+		return m.memo.lookup(v, false, m.computeBet)
+	}
+	return m.computeBet(v)
+}
+
+func (m *Empirical) computeBet(v *View) [6]float64 {
 	x := PolicyFeatures(v)
 	if m.Version >= 4 {
-		return predictForest(m.BettingForest[v.Street], x)
+		return predictCompact(m.compile().betting[v.Street], &x)
 	}
-	return predictPolicy(m.Betting[v.Street], x)
+	return predictPolicy(m.Betting[v.Street], &x)
 }
 
 func (m *Empirical) predictDraw(v *View) [6]float64 {
+	if m.memo != nil {
+		return m.memo.lookup(v, true, m.computeDraw)
+	}
+	return m.computeDraw(v)
+}
+
+func (m *Empirical) computeDraw(v *View) [6]float64 {
 	x := PolicyFeatures(v)
 	if m.Version >= 4 {
-		return predictForest(m.DrawingForest[v.Street-1], x)
+		return predictCompact(m.compile().drawing[v.Street-1], &x)
 	}
-	return predictPolicy(m.Drawing[v.Street-1], x)
+	return predictPolicy(m.Drawing[v.Street-1], &x)
 }
 
 func samplePolicy(p [6]float64, n int, r float64) (int, bool) {

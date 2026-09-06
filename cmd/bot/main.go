@@ -19,7 +19,6 @@ import (
 	"io"
 	"os"
 
-	"github.com/nuttakit/2-7-bot/internal/onyx"
 	"github.com/nuttakit/2-7-bot/internal/wire"
 )
 
@@ -40,7 +39,7 @@ func main() {
 
 // run reads arena messages until match-end or EOF.
 func run(input io.Reader, output io.Writer, debug io.Writer) error {
-	bot, err := onyx.New()
+	bot, err := newRuntimeBot()
 	if err != nil {
 		return err
 	}

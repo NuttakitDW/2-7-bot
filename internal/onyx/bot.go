@@ -26,6 +26,24 @@ type Bot struct {
 	opponentRaises  uint64
 }
 
+// NewModeled enables public-history tracking and the embedded acting-player
+// model for a hybrid policy, independently of the standalone river profile.
+func NewModeled() (*Bot, error) {
+	switch modelSelection {
+	case "mode", "confident", "range-call", "draw-model", "all-model", "all-bets", "nash-river", "range-response", "all-response", "plan-draw":
+	default:
+		return nil, fmt.Errorf("unknown model selection %q", modelSelection)
+	}
+	b, err := New()
+	if err != nil {
+		return nil, err
+	}
+	if b.bayes == nil {
+		b.bayes, err = newRiverSolver()
+	}
+	return b, err
+}
+
 func New() (*Bot, error) {
 	switch drawProfile {
 	case "baseline", "adaptive":

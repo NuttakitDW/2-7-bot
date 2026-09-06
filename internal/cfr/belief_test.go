@@ -62,3 +62,18 @@ func TestOpponentBeliefConditionsOnActionsAndExcludesKnownCards(t *testing.T) {
 		t.Fatalf("posterior action evidence ignored: low fraction=%v", low)
 	}
 }
+
+func TestOpponentBeliefPreservesHypotheticalDiscards(t *testing.T) {
+	m := passiveEmpirical()
+	known := cards.NewSet(cards.MustParse("2c", "3d", "4h", "7s", "Kc"))
+	history := []OpponentObservation{{View: View{Seat: 1, Street: Draw1}, Draw: true, Action: 2}, {View: View{Seat: 1, Street: Draw2}, Draw: true, Action: 1}}
+	got := OpponentBelief(m, history, known, rand.New(rand.NewPCG(13, 29)), 64)
+	if len(got) != 64 {
+		t.Fatal("missing posterior")
+	}
+	for _, p := range got {
+		if p.Dead.Len() != 3 || p.Dead&(known|cards.NewSet(p.Hand[:])) != 0 {
+			t.Fatalf("incorrect unavailable cards %+v", p)
+		}
+	}
+}

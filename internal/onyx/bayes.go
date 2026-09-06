@@ -17,15 +17,21 @@ var opponentPolicyData []byte
 var beliefParticleCount = "512"
 
 type riverSolver struct {
-	model     *cfr.Empirical
-	tree      *cfr.Tree
-	node      int32
-	drawn     [2]cfr.DrawCounts
-	lastAggr  int
-	known     cards.Set
-	history   []cfr.OpponentObservation
-	rng       *rand.Rand
-	particles int
+	model       *cfr.Empirical
+	riverRange  *riverRangeModel
+	equilibrium *riverEquilibrium
+	priors      *riverPriors
+	planBelief  []cfr.BeliefHand
+	planKnown   cards.Set
+	planCount   int
+	tree        *cfr.Tree
+	node        int32
+	drawn       [2]cfr.DrawCounts
+	lastAggr    int
+	known       cards.Set
+	history     []cfr.OpponentObservation
+	rng         *rand.Rand
+	particles   int
 }
 
 func newRiverSolver() (*riverSolver, error) {
@@ -33,11 +39,33 @@ func newRiverSolver() (*riverSolver, error) {
 	if err != nil || n < 64 || n > 8192 {
 		return nil, fmt.Errorf("onyx: invalid belief particle count %q", beliefParticleCount)
 	}
-	m, err := cfr.DecodeEmpirical(opponentPolicyData)
+	m, err := decodeOpponentModel(opponentPolicyData)
 	if err != nil {
 		return nil, fmt.Errorf("onyx: opponent model: %w", err)
 	}
-	return &riverSolver{model: m, tree: cfr.BuildTree(), node: -1, particles: n, rng: rand.New(rand.NewPCG(rand.Uint64(), rand.Uint64()))}, nil
+	var ranges *riverRangeModel
+	if modelSelection == "range-call" {
+		ranges, err = decodeRiverRange(opponentPolicyData)
+		if err != nil {
+			return nil, fmt.Errorf("onyx: river range: %w", err)
+		}
+	}
+	tree := cfr.BuildTree()
+	var equilibrium *riverEquilibrium
+	if modelSelection == "nash-river" {
+		equilibrium, err = decodeRiverEquilibrium(opponentPolicyData, tree)
+		if err != nil {
+			return nil, fmt.Errorf("onyx: river equilibrium: %w", err)
+		}
+	}
+	var priors *riverPriors
+	if modelSelection == "range-response" || modelSelection == "all-response" {
+		priors, err = decodeRiverPriors(opponentPolicyData)
+		if err != nil {
+			return nil, fmt.Errorf("onyx: river priors: %w", err)
+		}
+	}
+	return &riverSolver{model: m, riverRange: ranges, equilibrium: equilibrium, priors: priors, tree: tree, node: -1, particles: n, rng: rand.New(rand.NewPCG(rand.Uint64(), rand.Uint64()))}, nil
 }
 
 func (s *riverSolver) reset() {
@@ -45,6 +73,8 @@ func (s *riverSolver) reset() {
 	s.lastAggr = -1
 	s.known = 0
 	s.history = s.history[:0]
+	s.planBelief = nil
+	s.planKnown, s.planCount = 0, 0
 	for p := range s.drawn {
 		for street := range s.drawn[p] {
 			s.drawn[p][street] = -1
