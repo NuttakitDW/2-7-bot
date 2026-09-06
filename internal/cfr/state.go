@@ -84,8 +84,6 @@ func (s *State) View(t *Tree, id int32, p int, rng *rand.Rand) View {
 	v := View{Hand: s.Hands[p], Seat: p, Node: id, Street: int(node.Street),
 		Drawn: s.Drawn, LastAggr: s.LastAggr, Rand: rng.Float64()}
 	if node.Kind == KindBet {
-		v.Pot = node.Commit[0] + node.Commit[1]
-		v.ToCall = max(0, node.Commit[1-p]-node.Commit[p])
 		v.Facing = node.Facing
 		v.Wagers = int(node.Wagers)
 		v.CanRaise = node.Acts[len(node.Acts)-1] == Aggr

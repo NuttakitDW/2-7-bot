@@ -20,8 +20,6 @@ type View struct {
 	Facing   bool
 	CanRaise bool
 	Wagers   int
-	Pot      int32
-	ToCall   int32
 	// Drawn is each seat's draw count per street, -1 before drawing.
 	Drawn [2]DrawCounts
 	// LastAggr is the seat that made the hand's last wager, -1 for none.
@@ -35,8 +33,6 @@ type DrawCounts [Streets]int8
 
 // Model is anything that plays a hand from a View. The trainer uses one as
 // a fixed opponent; the match simulator plays any two against each other.
-// A model used with multiple training workers must support concurrent calls.
-// Immutable models can use View.Rand instead of sharing mutable RNG state.
 type Model interface {
 	// Bet answers a betting node with Fold, Pass or Aggr. ok is false
 	// where the model has no opinion, which the caller must resolve.

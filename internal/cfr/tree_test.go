@@ -88,7 +88,7 @@ func TestPayoffShowdown(t *testing.T) {
 }
 
 func TestAbstractionBuckets(t *testing.T) {
-	abs := buildAbstraction(false)
+	abs := BuildAbstraction()
 	if abs.NumDrawClasses != 3653 {
 		t.Fatalf("draw classes = %d, want 3653: every rank set of one to five ranks bar the thirteen five-of-a-kinds", abs.NumDrawClasses)
 	}
@@ -109,7 +109,7 @@ func TestAbstractionBuckets(t *testing.T) {
 	for _, test := range tests {
 		hand := cards.SortedByRank(cards.MustParse(splitWords(test.hand)...))
 		info := abs.Classes[Class(hand)]
-		if info.Draw != uint16(test.draw) || info.Final != test.final {
+		if info.Draw != test.draw || info.Final != test.final {
 			t.Errorf("%s: draw/final = %d/%d, want %d/%d", test.hand, info.Draw, info.Final, test.draw, test.final)
 		}
 		if info.NumCand != test.cands {

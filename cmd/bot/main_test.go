@@ -9,9 +9,11 @@ import (
 	"time"
 )
 
-// A fixed transcript for framing and match-end checks. Strategy-independent
-// play is exercised interactively in session_test.go, which echoes the bot's
-// actual replies into subsequent public events.
+// A heads-up 27td-fl session from seat 0's point of view, in the shape the
+// arena actually sends: hello, the handshake, one hand played to showdown,
+// then match-end. The hole cards are the nut hand 7-5-4-3-2, so every
+// decision below has one obviously right answer and the assertions can be
+// exact rather than merely "legal".
 //
 // It also carries the three things the framing contract says must not break
 // a bot: a blank line, an unknown message type, and an unknown event type.
@@ -35,7 +37,6 @@ const session = `
 
 {"t":"weather-report","outlook":{"cloudy":true}}
 {"t":"event","hand_no":0,"ev":{"event":"rabbit-hunt","cards":{"burned":3}}}
-{"t":"event","hand_no":0,"ev":{"event":"acted","seat":1,"action":{"kind":"check"},"street_commit":0,"all_in":false}}
 {"t":"act","hand_no":0,"seat":0,"decision":{"kind":"wager","fold":false,"check":true,"bet":{"min_to":100,"max_to":100}},"deadline_ms":1000}
 {"t":"event","hand_no":0,"ev":{"event":"acted","seat":0,"action":{"kind":"bet","to":100},"street_commit":100,"all_in":false}}
 {"t":"event","hand_no":0,"ev":{"event":"acted","seat":1,"action":{"kind":"fold"},"street_commit":0,"all_in":false}}
@@ -44,6 +45,32 @@ const session = `
 {"t":"match-end"}
 {"t":"act","hand_no":1,"seat":0,"decision":{"kind":"wager","fold":true,"check":false,"call":50},"deadline_ms":1000}
 `
+
+func TestRunPlaysASession(t *testing.T) {
+	var replies bytes.Buffer
+	if err := run(strings.NewReader(session), &replies, io.Discard); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	want := []string{
+		`{"t":"join"}`,
+		// The nuts open-raise rather than limping.
+		`{"t":"action","action":{"kind":"raise","to":200}}`,
+		// And stand pat, as an empty list rather than an absent field.
+		`{"t":"action","action":{"kind":"discard","cards":[]}}`,
+		// And bet.
+		`{"t":"action","action":{"kind":"bet","to":100}}`,
+	}
+	got := strings.Split(strings.TrimSpace(replies.String()), "\n")
+	if len(got) != len(want) {
+		t.Fatalf("got %d replies, want %d:\n%s", len(got), len(want), replies.String())
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("reply %d = %s, want %s", i, got[i], want[i])
+		}
+	}
+}
 
 // match-end means no further messages will be sent; anything after it is not
 // ours to answer. The session above ends with a stray act to prove we stop.
