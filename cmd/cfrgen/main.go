@@ -14,6 +14,7 @@ import (
 	"math"
 	"os"
 	"runtime/pprof"
+	"strconv"
 	"strings"
 	"time"
 
@@ -76,6 +77,26 @@ func (w *world) load(path string, purify float64) (*cfr.Player, error) {
 
 // model resolves an opponent name: a heuristic, or a blueprint file.
 func (w *world) model(name string, purify float64) (cfr.Model, error) {
+	if rest, sharp := strings.CutPrefix(name, "sharp:"); sharp {
+		// sharp:ALPHA:FILE.json
+		alphaText, path, ok := strings.Cut(rest, ":")
+		if !ok || !strings.HasSuffix(path, ".json") {
+			return nil, fmt.Errorf("sharp wants sharp:ALPHA:FILE.json")
+		}
+		alpha, err := strconv.ParseFloat(alphaText, 64)
+		if err != nil || alpha <= 0 {
+			return nil, fmt.Errorf("invalid sharpening %q", alphaText)
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return nil, err
+		}
+		m, err := cfr.DecodeEmpirical(raw)
+		if err != nil {
+			return nil, err
+		}
+		return m.Sharpened(alpha), nil
+	}
 	if path, mode := strings.CutPrefix(name, "mode:"); mode {
 		if !strings.HasSuffix(path, ".json") {
 			return nil, fmt.Errorf("mode requires an empirical JSON model")
@@ -124,6 +145,8 @@ func train(args []string) error {
 	resetAvg := fs.Bool("resetavg", false, "with -resume: drop the accumulated average, keep the regrets")
 	regret := fs.String("regret", "plus", "regret update: plus or vanilla (signed)")
 	cpuProfile := fs.String("cpuprofile", "", "write a CPU profile of the run")
+	fixed := fs.String("fixed", "", "card dealt to the big blind every hand: e.g. Qh, or random")
+	hidden := fs.Float64("hidden", 0.15, "with -fixed and a fixed-card layout: fraction of hands the button plays not knowing the card")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -162,6 +185,16 @@ func train(args []string) error {
 	tr.Vanilla = *regret == "vanilla"
 	tr.Model, tr.ModelWeight = model, *weight
 	tr.ModelByHand = *modelScope == "hand"
+	tr.FixedHidden = *hidden
+	if *fixed == "random" {
+		tr.FixedRandom = true
+	} else if *fixed != "" {
+		card, err := cards.ParseCard(*fixed)
+		if err != nil {
+			return err
+		}
+		tr.FixedBB, tr.HasFixedBB = card, true
+	}
 	if *resume != "" {
 		if err := tr.LoadState(*resume); err != nil {
 			return err
@@ -235,6 +268,7 @@ func eval(args []string) error {
 	seed := fs.Uint64("seed", 7, "deal seed")
 	purify := fs.Float64("purify", 0, "drop actions under this probability")
 	greedy := fs.Bool("greedy", false, "hero uses the most likely trained action")
+	fixed := fs.String("fixed", "", "card dealt to the big blind every hand: e.g. Qh, or random")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -260,7 +294,15 @@ func eval(args []string) error {
 	if err != nil {
 		return err
 	}
-	result := cfr.Simulate(w.tree, w.eval, hero, villain, cfr.Heuristic{}, *hands, *seed)
+	var fixedCard *cards.Card
+	if *fixed != "" && *fixed != "random" {
+		card, err := cards.ParseCard(*fixed)
+		if err != nil {
+			return err
+		}
+		fixedCard = &card
+	}
+	result := cfr.SimulateFixed(w.tree, w.eval, hero, villain, cfr.Heuristic{}, *hands, *seed, fixedCard, *fixed == "random")
 	fmt.Printf("%s vs %s: %+.2f ±%.2f BB/100 over %d hands\n",
 		*bpPath, *vs, result.Rate, result.CI, result.Hands)
 	fmt.Printf("hero fallbacks: %d/%d decisions; opponent: %d/%d\n",

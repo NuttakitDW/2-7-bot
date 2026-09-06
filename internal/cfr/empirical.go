@@ -23,6 +23,9 @@ type Empirical struct {
 	BettingForest [4][][]PolicyNode `json:"betting_forest,omitempty"`
 	DrawingForest [3][][]PolicyNode `json:"drawing_forest,omitempty"`
 
+	// ResponseAlpha sharpens river response predictions (responseProbabilities).
+	ResponseAlpha float64 `json:"-"`
+
 	memo     *policyMemo
 	compiled *compiledForests
 }
@@ -57,11 +60,15 @@ type PolicyNode struct {
 	Prob      [6]float64 `json:"prob"`
 }
 
-const PolicyFeatureCount = 56
+const PolicyFeatureCount = 60
 
 // PolicyFeatures version 2 adds pot size, call size and pot odds at 29..31.
 // Version 5 adds prior public actions at 32..55, six counts per street:
 // own/opponent raises, own/opponent checks, own/opponent calls.
+// Version 6 adds at 56..59 the public node (numbered depth-first, so a
+// threshold on it isolates a subtree, which is a history prefix), the
+// draw-count difference on the latest draw, total opponent wagers so far,
+// and whether the acting player made the hand's last wager.
 // Card ranks use deuce=2 through ace=14; sizes are in big bets.
 func PolicyFeatures(v *View) [PolicyFeatureCount]float64 {
 	x := policyPrivateFeatures[handclass.Of(v.Hand[:])]
@@ -88,7 +95,17 @@ func PolicyFeatures(v *View) [PolicyFeatureCount]float64 {
 			for action := 0; action < 3; action++ {
 				x[32+street*6+action*2] = float64(history[street][v.Seat][action])
 				x[33+street*6+action*2] = float64(history[street][1-v.Seat][action])
+				if action == 0 {
+					x[58] += float64(history[street][1-v.Seat][action])
+				}
 			}
+		}
+		x[56] = float64(v.Node)
+		if v.Street > Predraw {
+			x[57] = float64(v.Drawn[v.Seat][v.Street] - v.Drawn[1-v.Seat][v.Street])
+		}
+		if v.LastAggr == v.Seat {
+			x[59] = 1
 		}
 	}
 	return x
@@ -139,7 +156,7 @@ func DecodeEmpirical(raw []byte) (*Empirical, error) {
 	if err := json.Unmarshal(raw, &m); err != nil {
 		return nil, err
 	}
-	if m.Version < 1 || m.Version > 5 {
+	if m.Version < 1 || m.Version > 6 {
 		return nil, fmt.Errorf("unsupported empirical model version %d", m.Version)
 	}
 	featureCount := PolicyFeatureCount
@@ -147,6 +164,8 @@ func DecodeEmpirical(raw []byte) (*Empirical, error) {
 		featureCount = 29
 	} else if m.Version < 5 {
 		featureCount = 32
+	} else if m.Version == 5 {
+		featureCount = 56
 	}
 	validate := func(nodes []PolicyNode) error {
 		if len(nodes) == 0 {

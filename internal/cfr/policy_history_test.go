@@ -12,8 +12,8 @@ func TestPolicyHistoryFeaturesUseOnlyPriorActions(t *testing.T) {
 		t.Helper()
 		v := View{Node: id, Seat: seat, Hand: five("2c", "3d", "4h", "7s", "Kc")}
 		x := PolicyFeatures(&v)
-		if len(x) != 56 {
-			t.Fatalf("features=%d, want 56", len(x))
+		if len(x) != 60 {
+			t.Fatalf("features=%d, want 60", len(x))
 		}
 		for i, value := range want {
 			if x[32+i] != value {

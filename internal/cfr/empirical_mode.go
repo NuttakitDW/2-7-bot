@@ -1,5 +1,7 @@
 package cfr
 
+import "math"
+
 // Mode treats uncertainty in the fitted probabilities as uncertainty about
 // a fixed policy, selecting its most likely legal action. It leaves the
 // original stochastic model unchanged. Neither interpretation is exact;
@@ -57,4 +59,48 @@ func mostLikelyPolicy(p [6]float64, n int) (int, bool) {
 		}
 	}
 	return best, p[best] > 0
+}
+
+// Sharpened raises the fitted probabilities to a power before sampling:
+// alpha 1 is the fitted model, larger values approach Mode while keeping
+// some mixing where the fit is unsure. Like Mode it is an interpretation
+// of the fit, not a calibrated one.
+func (m *Empirical) Sharpened(alpha float64) Model { return empiricalSharp{model: m, alpha: alpha} }
+
+type empiricalSharp struct {
+	model *Empirical
+	alpha float64
+}
+
+func (m empiricalSharp) WithMemo() Model {
+	return empiricalSharp{model: m.model.WithMemo().(*Empirical), alpha: m.alpha}
+}
+
+func sharpen(p [6]float64, n int, alpha float64) [6]float64 {
+	var out [6]float64
+	for i := 0; i < n; i++ {
+		if p[i] > 0 {
+			out[i] = math.Pow(p[i], alpha)
+		}
+	}
+	return out
+}
+
+func (m empiricalSharp) Bet(v *View) (int, bool) {
+	p := m.model.predictBet(v)
+	if !v.Facing {
+		p[Fold] = 0
+	}
+	if !v.CanRaise {
+		p[Aggr] = 0
+	}
+	return samplePolicy(sharpen(p, 3, m.alpha), 3, v.Rand)
+}
+
+func (m empiricalSharp) Draw(v *View) (uint8, bool) {
+	n, ok := samplePolicy(sharpen(m.model.predictDraw(v), 6, m.alpha), 6, v.Rand)
+	if !ok {
+		return 0, false
+	}
+	return m.model.keepForCount(v, n), true
 }

@@ -15,6 +15,9 @@ type State struct {
 	Ptr      int
 	Drawn    [2]DrawCounts
 	LastAggr int
+	// FixedGroup is the button's knowledge of the big blind's constant
+	// card this hand (FixedGroup), 0 for none.
+	FixedGroup int
 }
 
 // Deal shuffles and deals a fresh hand: five cards each, button first.
@@ -28,6 +31,21 @@ func (s *State) Deal(rng *rand.Rand) {
 	for i := len(s.Deck) - 1; i > 0; i-- {
 		j := rng.IntN(i + 1)
 		s.Deck[i], s.Deck[j] = s.Deck[j], s.Deck[i]
+	}
+	s.Reset()
+}
+
+// DealFixed deals like Deal, then places one card in the big blind's hand.
+// The arena's shuffle leaves the big blind's first card constant for a
+// whole match (docs/game/benchmarks, 2026-09-06: 143 of 143 hosted
+// matches), so a strategy may be trained and played knowing that card.
+func (s *State) DealFixed(rng *rand.Rand, fixed cards.Card) {
+	s.Deal(rng)
+	for i := range s.Deck {
+		if s.Deck[i] == fixed {
+			s.Deck[i], s.Deck[5] = s.Deck[5], s.Deck[i]
+			break
+		}
 	}
 	s.Reset()
 }
@@ -83,6 +101,9 @@ func (s *State) View(t *Tree, id int32, p int, rng *rand.Rand) View {
 	node := &t.Nodes[id]
 	v := View{Hand: s.Hands[p], Seat: p, Node: id, Street: int(node.Street),
 		Drawn: s.Drawn, LastAggr: s.LastAggr, Rand: rng.Float64()}
+	if p == Btn {
+		v.FixedGroup = s.FixedGroup
+	}
 	if node.Kind == KindBet {
 		v.Pot = node.Commit[0] + node.Commit[1]
 		v.ToCall = max(0, node.Commit[1-p]-node.Commit[p])

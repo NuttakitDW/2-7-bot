@@ -46,7 +46,7 @@ func (s *riverSolver) planLastDraw(hero int, hand []cards.Card, d wire.Decision,
 		}
 	}
 	known := s.known | cards.NewSet(hand)
-	belief := cfr.OpponentBelief(s.model, s.history, known, s.rng, s.particles)
+	belief := s.belief(hero, known)
 	pat, patOK := cfr.OneCardRiverValue(s.tree, s.node, v, belief, known, -1, s.model)
 	draw, drawOK := cfr.OneCardRiverValue(s.tree, s.node, v, belief, known, discard, s.model)
 	if !patOK || !drawOK {

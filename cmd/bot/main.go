@@ -86,7 +86,7 @@ func run(input io.Reader, output io.Writer, debug io.Writer) error {
 			}
 
 		case wire.MsgMatchEnd:
-			_, _ = fmt.Fprintln(debug, "match end")
+			_, _ = fmt.Fprintf(debug, "match end, %d blueprint fallbacks\n", bot.fallbacks())
 			return nil
 
 		default:

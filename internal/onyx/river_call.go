@@ -32,7 +32,7 @@ func (s *riverSolver) call(hero int, hand []cards.Card, d wire.Decision) (wire.A
 		return wire.Action{}, false
 	}
 	v := s.view(n)
-	belief := cfr.OpponentBelief(s.model, s.history, s.known|cards.NewSet(hand), s.rng, s.particles)
+	belief := s.belief(hero, s.known|cards.NewSet(hand))
 	value, ok := riverCallValue(hand, belief, float64(v.Pot), float64(v.ToCall))
 	if !ok {
 		return wire.Action{}, false

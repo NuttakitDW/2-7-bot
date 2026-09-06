@@ -18,7 +18,7 @@ ONYX_DEFENSE ?= original
 ONYX_LDFLAGS = -X github.com/nuttakit/2-7-bot/internal/onyx.predrawProfile=$(ONYX_OPEN) \
 	-X github.com/nuttakit/2-7-bot/internal/onyx.predrawDefense=$(ONYX_DEFENSE)
 
-.PHONY: help arena bot bot-release bot-model-release test fmt vet docs-check engine spar
+.PHONY: help arena bot bot-release bot-model-release bot-model test fmt vet docs-check engine spar
 
 help:
 	@echo 'arena       build the harness CLI into bin/arena'
@@ -52,16 +52,35 @@ MODEL_POLICY ?= bin/onyx-swit-policy-history-large.json.gz
 MODEL_BLUEPRINT ?= bin/onyx-78-blueprint.bin.gz
 MODEL_BOT_NAME ?= 2-7-onyx-158
 MODEL_SELECTION ?= mode
+MODEL_PROFILE ?= model-bets
+MODEL_ALPHA ?= 1
+MODEL_PARTICLES ?= 512
+MODEL_FIXED ?= none
+MODEL_LDFLAGS = $(ONYX_LDFLAGS) -X main.playerProfile=$(MODEL_PROFILE) \
+	-X github.com/nuttakit/2-7-bot/internal/onyx.modelSelection=$(MODEL_SELECTION) \
+	-X github.com/nuttakit/2-7-bot/internal/onyx.riverResponseAlpha=$(MODEL_ALPHA) \
+	-X github.com/nuttakit/2-7-bot/internal/onyx.beliefParticleCount=$(MODEL_PARTICLES) \
+	-X github.com/nuttakit/2-7-bot/internal/cfr.fixedProfile=$(MODEL_FIXED)
+MODEL_OVERLAY = python3 -c 'import json,pathlib,sys; r=pathlib.Path.cwd(); paths=["internal/onyx/opponent_policy.json","internal/lapis/blueprint.bin.gz"]; pathlib.Path(sys.argv[1]).write_text(json.dumps({"Replace":{str(r/p):str(pathlib.Path(v).resolve()) for p,v in zip(paths,sys.argv[2:])}}))'
 
 bot-model-release:
 	@test -f "$(MODEL_POLICY)" && test -f "$(MODEL_BLUEPRINT)"
 	@mkdir -p bin
 	@model_overlay=$$(mktemp "$$(pwd)/bin/model-overlay.XXXXXX"); \
 	  trap 'rm -f "$$model_overlay"' EXIT; \
-	  python3 -c 'import json,pathlib,sys; r=pathlib.Path.cwd(); paths=["internal/onyx/opponent_policy.json","internal/lapis/blueprint.bin.gz"]; pathlib.Path(sys.argv[1]).write_text(json.dumps({"Replace":{str(r/p):str(pathlib.Path(v).resolve()) for p,v in zip(paths,sys.argv[2:])}}))' "$$model_overlay" "$(MODEL_POLICY)" "$(MODEL_BLUEPRINT)" && \
+	  $(MODEL_OVERLAY) "$$model_overlay" "$(MODEL_POLICY)" "$(MODEL_BLUEPRINT)" && \
 	  CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -overlay "$$model_overlay" \
-	    -ldflags='-s -w $(ONYX_LDFLAGS) -X main.playerProfile=model-bets -X github.com/nuttakit/2-7-bot/internal/onyx.modelSelection=$(MODEL_SELECTION)' \
-	    -o bin/$(MODEL_BOT_NAME) ./cmd/bot
+	    -ldflags='-s -w $(MODEL_LDFLAGS)' -o bin/$(MODEL_BOT_NAME) ./cmd/bot
+
+# The same build for this host, into bin/bot-model, so the local engine can
+# spar it (bin/diag/spar.sh) before anything is uploaded.
+bot-model:
+	@test -f "$(MODEL_POLICY)" && test -f "$(MODEL_BLUEPRINT)"
+	@mkdir -p bin
+	@model_overlay=$$(mktemp "$$(pwd)/bin/model-overlay.XXXXXX"); \
+	  trap 'rm -f "$$model_overlay"' EXIT; \
+	  $(MODEL_OVERLAY) "$$model_overlay" "$(MODEL_POLICY)" "$(MODEL_BLUEPRINT)" && \
+	  go build -overlay "$$model_overlay" -ldflags='$(MODEL_LDFLAGS)' -o bin/bot-model ./cmd/bot
 
 test:
 	go test ./...

@@ -1,6 +1,7 @@
 package cfr
 
 import (
+	"github.com/nuttakit/2-7-bot/internal/cards"
 	"math/rand/v2"
 	"sync"
 	"sync/atomic"
@@ -40,6 +41,15 @@ type Trainer struct {
 	// ModelByHand samples a fixed opponent type once per traverser walk.
 	// False retains the original decision-wise mixture. Set before Run.
 	ModelByHand bool
+	// FixedBB, when HasFixedBB, is dealt to the big blind every hand
+	// (State.DealFixed); FixedRandom deals a fresh random card instead.
+	// With a fixed-card layout the button trains its group's slice, and
+	// on a FixedHidden fraction of hands plays group 0 as if it did not
+	// know the card. Set before Run.
+	FixedBB     cards.Card
+	HasFixedBB  bool
+	FixedRandom bool
+	FixedHidden float64
 
 	BetRegret  []float64
 	BetStrat   []float64
@@ -74,15 +84,16 @@ func (tr *Trainer) Iterations() int64 { return tr.iterations.Load() }
 
 // Run trains for n iterations across w workers.
 func (tr *Trainer) Run(n int64, workers int, seed uint64) {
+	model := tr.Model
+	if m, ok := tr.Model.(memoizer); ok {
+		model = m.WithMemo()
+	}
 	var wg sync.WaitGroup
 	for w := 0; w < workers; w++ {
 		wg.Add(1)
 		go func(w int) {
 			defer wg.Done()
-			worker := &worker{tr: tr, rng: rand.New(rand.NewPCG(seed, uint64(w))), model: tr.Model}
-			if m, ok := tr.Model.(memoizer); ok {
-				worker.model = m.WithMemo()
-			}
+			worker := &worker{tr: tr, rng: rand.New(rand.NewPCG(seed, uint64(w))), model: model}
 			for {
 				tr.mu.RLock()
 				var iteration int64
@@ -119,13 +130,13 @@ type worker struct {
 	fixedOpponent bool
 }
 
-// memoizer is a Model that can hand each walker a privately cached copy.
+// memoizer is a Model that can serve the walkers through a prediction cache.
 type memoizer interface {
 	WithMemo() Model
 }
 
 func (w *worker) iterate(t float64) {
-	w.state.Deal(w.rng)
+	w.deal()
 	for traverser := 0; traverser < 2; traverser++ {
 		w.state.Reset()
 		w.selectOpponent()
@@ -140,6 +151,27 @@ func (w *worker) iterate(t float64) {
 			w.walk(w.tr.Tree.Root, traverser, t)
 		}
 		w.averageOnly = false
+	}
+}
+
+// deal starts the iteration's hand, fixing the big blind's card when the
+// trainer asks for it.
+func (w *worker) deal() {
+	w.state.FixedGroup = 0
+	switch {
+	case w.tr.FixedRandom:
+		card := cards.CardFromIndex(w.rng.IntN(cards.DeckSize))
+		w.state.DealFixed(w.rng, card)
+		if w.tr.Layout.FixedGroups > 1 && w.rng.Float64() >= w.tr.FixedHidden {
+			w.state.FixedGroup = FixedGroup(card.Rank)
+		}
+	case w.tr.HasFixedBB:
+		w.state.DealFixed(w.rng, w.tr.FixedBB)
+		if w.tr.Layout.FixedGroups > 1 && w.rng.Float64() >= w.tr.FixedHidden {
+			w.state.FixedGroup = FixedGroup(w.tr.FixedBB.Rank)
+		}
+	default:
+		w.state.Deal(w.rng)
 	}
 }
 
@@ -162,7 +194,7 @@ func (w *worker) walkBet(id int32, node *Node, traverser int, t float64) float64
 	p := int(node.Actor)
 	class := Class(w.state.Hands[p][:])
 	street := int(node.Street)
-	slot := w.tr.Layout.BetSlot(node, BetContext(p, street, &w.state.Drawn), w.tr.Abs.Bucket(street, class))
+	slot := w.tr.Layout.BetSlotFixed(node, BetContext(p, street, &w.state.Drawn), w.tr.Abs.Bucket(street, class), w.state.FixedGroup)
 	n := len(node.Acts)
 	regret := w.tr.BetRegret[slot : slot+int64(n)]
 	lock := w.tr.setLock(false, slot)
@@ -221,8 +253,8 @@ func (w *worker) walkDraw(id int32, node *Node, traverser int, t float64) float6
 	p := int(node.Actor)
 	street := int(node.Street)
 	info := &w.tr.Abs.Classes[Class(w.state.Hands[p][:])]
-	slot := w.tr.Layout.DrawSlot(street, p, AggrState(p, w.state.LastAggr),
-		DrawContext(p, street, &w.state.Drawn), int(info.DrawClass))
+	slot := w.tr.Layout.DrawSlotFixed(street, p, AggrState(p, w.state.LastAggr),
+		DrawContext(p, street, &w.state.Drawn), int(info.DrawClass), w.state.FixedGroup)
 	n := int(info.NumCand)
 	regret := w.tr.DrawRegret[slot : slot+int64(n)]
 	lock := w.tr.setLock(true, slot)

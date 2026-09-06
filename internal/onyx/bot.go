@@ -7,6 +7,7 @@ import (
 	"math/rand/v2"
 
 	"github.com/nuttakit/2-7-bot/internal/cards"
+	"github.com/nuttakit/2-7-bot/internal/cfr"
 	"github.com/nuttakit/2-7-bot/internal/deuce"
 	"github.com/nuttakit/2-7-bot/internal/handclass"
 	"github.com/nuttakit/2-7-bot/internal/policy"
@@ -94,6 +95,9 @@ func New() (*Bot, error) {
 func (b *Bot) Hello(m wire.Message) {
 	b.Table.Hello(m)
 	b.opponentActions, b.opponentRaises = 0, 0
+	if b.bayes != nil {
+		b.bayes.fixed = cfr.FixedCard{}
+	}
 }
 func (b *Bot) HandStart(m wire.Message) {
 	if b.bayes != nil {
@@ -143,6 +147,19 @@ func (b *Bot) Observe(e wire.Event) {
 		}
 	}
 	b.Table.Observe(e)
+}
+
+// RiverSolve answers a last-street wager from the exact solve against the
+// fitted opponent model, when the tracker can place the hand.
+func (b *Bot) RiverSolve(d wire.Decision) (wire.Action, bool) {
+	if b.bayes == nil {
+		return wire.Action{}, false
+	}
+	a, ok := b.bayes.decide(b.Table.Hand.Seat, b.Table.Hand.Cards, d)
+	if !ok {
+		return wire.Action{}, false
+	}
+	return wire.Legalize(d, a, b.Table.Hand.Cards), true
 }
 
 func (b *Bot) Decide(d wire.Decision) wire.Action {

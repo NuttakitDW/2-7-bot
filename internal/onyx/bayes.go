@@ -16,6 +16,10 @@ var opponentPolicyData []byte
 
 var beliefParticleCount = "512"
 
+// riverResponseAlpha sharpens the fitted opponent's predicted river
+// responses toward its most likely action (cfr.Empirical.ResponseAlpha).
+var riverResponseAlpha = "1"
+
 type riverSolver struct {
 	model       *cfr.Empirical
 	riverRange  *riverRangeModel
@@ -32,6 +36,7 @@ type riverSolver struct {
 	history     []cfr.OpponentObservation
 	rng         *rand.Rand
 	particles   int
+	fixed       cfr.FixedCard
 }
 
 func newRiverSolver() (*riverSolver, error) {
@@ -43,6 +48,11 @@ func newRiverSolver() (*riverSolver, error) {
 	if err != nil {
 		return nil, fmt.Errorf("onyx: opponent model: %w", err)
 	}
+	alpha, err := strconv.ParseFloat(riverResponseAlpha, 64)
+	if err != nil || alpha < 1 || alpha > 16 {
+		return nil, fmt.Errorf("onyx: invalid river response sharpening %q", riverResponseAlpha)
+	}
+	m.ResponseAlpha = alpha
 	var ranges *riverRangeModel
 	if modelSelection == "range-call" {
 		ranges, err = decodeRiverRange(opponentPolicyData)
@@ -102,6 +112,9 @@ func (s *riverSolver) observe(e wire.Event, hero int) {
 	}
 	if e.Kind == wire.EventDealHole && e.Seat == hero {
 		s.known |= cards.NewSet(e.Cards)
+		if hero != cfr.Btn {
+			s.fixed.ObserveBigBlind(cards.NewSet(e.Cards))
+		}
 	}
 	if e.Kind != wire.EventActed && e.Kind != wire.EventDrawResult {
 		return
@@ -169,7 +182,7 @@ func (s *riverSolver) decide(hero int, hand []cards.Card, d wire.Decision) (wire
 	}
 	v := s.view(n)
 	copy(v.Hand[:], cards.SortedByRank(hand))
-	belief := cfr.OpponentBelief(s.model, s.history, s.known|cards.NewSet(hand), s.rng, s.particles)
+	belief := s.belief(hero, s.known|cards.NewSet(hand))
 	a, _, ok := cfr.BestRiverAction(s.tree, s.node, v, belief, s.model)
 	if !ok {
 		return wire.Action{}, false
@@ -185,4 +198,14 @@ func (s *riverSolver) decide(hero int, hand []cards.Card, d wire.Decision) (wire
 		}
 		return wire.Check(), true
 	}
+}
+
+// belief is the opponent's hand distribution given everything public,
+// including the arena's constant big-blind card once it is identified.
+func (s *riverSolver) belief(hero int, known cards.Set) []cfr.BeliefHand {
+	held := cards.Set(0)
+	if hero == cfr.Btn {
+		held = s.fixed.OpponentHolds() &^ known
+	}
+	return cfr.OpponentBeliefHolding(s.model, s.history, known, held, s.rng, s.particles)
 }

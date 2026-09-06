@@ -1,6 +1,9 @@
 package cfr
 
-import "github.com/nuttakit/2-7-bot/internal/handclass"
+import (
+	"github.com/nuttakit/2-7-bot/internal/cards"
+	"github.com/nuttakit/2-7-bot/internal/handclass"
+)
 
 // Layout maps an information set to a slot in the flat strategy tables.
 // Trainer and Blueprint share it, so it is a pure function of the tree
@@ -17,6 +20,12 @@ import "github.com/nuttakit/2-7-bot/internal/handclass"
 type Layout struct {
 	BetSlots  int64
 	DrawSlots int64
+	// FixedGroups is how many big-blind-card groups the button's sets are
+	// split into (fixedProfile "button"), 1 when they are not. Group 0
+	// is the button not knowing the card; baseBet and baseDraw are the
+	// size of one group's slice.
+	FixedGroups       int
+	baseBet, baseDraw int64
 	// drawClasses is the draw-class count the draw index arithmetic uses.
 	drawClasses  int64
 	finalBuckets int
@@ -37,16 +46,48 @@ const (
 // earlier betting order when the current contributions and action state match.
 var layoutProfile = "history"
 
+// fixedProfile "button" gives the button separate strategy slices per group
+// of the big blind's constant first card (State.DealFixed); "none" keeps a
+// single strategy.
+var fixedProfile = "none"
+
+// NumFixedGroups counts the big-blind-card groups: unknown, then the
+// deuce through the seven singly, eights with nines, and tens and above.
+const NumFixedGroups = 9
+
+// FixedGroup maps the big blind's constant card to its strategy group.
+func FixedGroup(rank cards.Rank) int {
+	switch {
+	case rank <= cards.Seven:
+		return int(rank-cards.Two) + 1
+	case rank <= cards.Nine:
+		return 7
+	default:
+		return 8
+	}
+}
+
 // NewLayout assigns every betting node its offset and sizes the tables.
 func NewLayout(t *Tree, a *Abstraction) *Layout {
+	var l *Layout
 	switch layoutProfile {
 	case "history", "history-rich":
-		return newHistoryLayout(t, a)
+		l = newHistoryLayout(t, a)
 	case "compact", "compact-rich":
-		return newCompactLayout(t, a)
+		l = newCompactLayout(t, a)
 	default:
 		panic("unknown CFR layout profile: " + layoutProfile)
 	}
+	switch fixedProfile {
+	case "none":
+	case "button":
+		l.FixedGroups = NumFixedGroups
+		l.BetSlots *= NumFixedGroups
+		l.DrawSlots *= NumFixedGroups
+	default:
+		panic("unknown CFR fixed-card profile: " + fixedProfile)
+	}
+	return l
 }
 
 func newHistoryLayout(t *Tree, a *Abstraction) *Layout {
@@ -62,6 +103,7 @@ func newHistoryLayout(t *Tree, a *Abstraction) *Layout {
 	}
 	l.BetSlots = offset
 	l.DrawSlots = int64(Streets-1) * 2 * aggrStates * drawCtx * l.drawClasses * MaxCand
+	l.FixedGroups, l.baseBet, l.baseDraw = 1, l.BetSlots, l.DrawSlots
 	return l
 }
 
@@ -94,6 +136,7 @@ func newCompactLayout(t *Tree, a *Abstraction) *Layout {
 		n.Offset = offset
 	}
 	l.BetSlots = slots
+	l.baseBet = slots
 	return l
 }
 
@@ -196,13 +239,37 @@ func AggrState(p int, lastAggr int) int {
 	}
 }
 
-// BetSlot is the first slot of a betting set.
+// BetSlot is the first slot of a betting set, in the button's group 0.
 func (l *Layout) BetSlot(node *Node, ctx, bucket int) int64 {
 	return node.Offset + int64(ctx*l.Buckets(int(node.Street))+bucket)*int64(len(node.Acts))
+}
+
+// BetSlotFixed is BetSlot in the button's slice for a big-blind-card
+// group; the big blind's own sets have one slice.
+func (l *Layout) BetSlotFixed(node *Node, ctx, bucket, group int) int64 {
+	slot := l.BetSlot(node, ctx, bucket)
+	if group > 0 && group < l.FixedGroups && node.Actor == Btn {
+		slot += int64(group) * l.baseBet
+	}
+	return slot
 }
 
 // DrawSlot is the first slot of a draw set; the set holds MaxCand slots.
 func (l *Layout) DrawSlot(street, p, aggr, ctx, drawClass int) int64 {
 	group := (((int64(street-Draw1)*2+int64(p))*aggrStates+int64(aggr))*drawCtx + int64(ctx))
 	return (group*l.drawClasses + int64(drawClass)) * MaxCand
+}
+
+// DrawSlotFixed is DrawSlot in the button's slice for a big-blind-card group.
+func (l *Layout) DrawSlotFixed(street, p, aggr, ctx, drawClass, group int) int64 {
+	slot := l.DrawSlot(street, p, aggr, ctx, drawClass)
+	if group > 0 && group < l.FixedGroups && p == Btn {
+		slot += int64(group) * l.baseDraw
+	}
+	return slot
+}
+
+// GroupBase is the first slot of a group's betting and draw slices.
+func (l *Layout) GroupBase(group int) (bet, draw int64) {
+	return int64(group) * l.baseBet, int64(group) * l.baseDraw
 }

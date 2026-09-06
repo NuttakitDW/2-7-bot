@@ -28,6 +28,9 @@ type View struct {
 	LastAggr int
 	// Rand is a uniform draw in [0,1) for a model that mixes.
 	Rand float64
+	// FixedGroup is the group of the big blind's constant card as the
+	// button knows it (FixedGroup), 0 when unknown or for the big blind.
+	FixedGroup int
 }
 
 // DrawCounts is one seat's draw count per street; -1 marks no draw yet.

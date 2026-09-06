@@ -48,6 +48,25 @@ func (m *Empirical) betProbabilities(v *View) [6]float64 {
 	return p
 }
 
+// responseProbabilities predicts the opponent's next betting action for a
+// river solve. ResponseAlpha above 1 sharpens the fit toward its mode, the
+// reading of a purified opponent; likelihoods for belief stay unsharpened.
+func (m *Empirical) responseProbabilities(v *View) [6]float64 {
+	p := m.betProbabilities(v)
+	if m.ResponseAlpha <= 1 {
+		return p
+	}
+	p = sharpen(p, 3, m.ResponseAlpha)
+	s := p[0] + p[1] + p[2]
+	if s == 0 {
+		return [6]float64{0, 1}
+	}
+	for i := 0; i < 3; i++ {
+		p[i] /= s
+	}
+	return p
+}
+
 func (m *Empirical) drawProbabilities(v *View) [6]float64 {
 	p := m.predictDraw(v)
 	s := 0.0
@@ -65,22 +84,39 @@ func (m *Empirical) drawProbabilities(v *View) [6]float64 {
 // conditions on public betting actions and draw counts; no actual opponent
 // private cards are inputs. Small likelihood floors tolerate model error.
 func OpponentBelief(m *Empirical, history []OpponentObservation, known cards.Set, rng *rand.Rand, n int) []BeliefHand {
-	if n < 1 || known.Len() > 32 {
+	return OpponentBeliefHolding(m, history, known, 0, rng, n)
+}
+
+// OpponentBeliefHolding is OpponentBelief with cards the opponent's initial
+// hand is known to contain (the arena's constant big-blind card), which
+// every particle starts with.
+func OpponentBeliefHolding(m *Empirical, history []OpponentObservation, known, held cards.Set, rng *rand.Rand, n int) []BeliefHand {
+	if n < 1 || known.Len() > 32 || held.Len() > 5 || known&held != 0 {
 		return nil
 	}
-	var available []cards.Card
+	var available, fixed []cards.Card
 	for i := 0; i < cards.DeckSize; i++ {
 		c := cards.CardFromIndex(i)
-		if cards.NewSet([]cards.Card{c})&known == 0 {
+		set := cards.NewSet([]cards.Card{c})
+		switch {
+		case set&held != 0:
+			fixed = append(fixed, c)
+		case set&known == 0:
 			available = append(available, c)
 		}
 	}
 	particles := make([]beliefParticle, n)
 	for i := range particles {
 		p := &particles[i]
-		copy(p.deck[:], available)
-		p.end = len(available)
-		rng.Shuffle(p.end, func(i, j int) { p.deck[i], p.deck[j] = p.deck[j], p.deck[i] })
+		// The deck starts with the held cards, then the shuffled rest: the
+		// first five are the initial hand, and replacements follow.
+		copy(p.deck[:], fixed)
+		copy(p.deck[len(fixed):], available)
+		p.end = len(fixed) + len(available)
+		rng.Shuffle(len(available), func(i, j int) {
+			i, j = i+len(fixed), j+len(fixed)
+			p.deck[i], p.deck[j] = p.deck[j], p.deck[i]
+		})
 		copy(p.Hand[:], p.deck[:5])
 		sortHand(&p.Hand)
 		p.ptr = 5
@@ -251,13 +287,13 @@ func solveRiver(t *Tree, id int32, hero View, belief []BeliefHand, m *Empirical,
 			v.Hand = belief[i].Hand
 			var p [6]float64
 			if cache == nil {
-				p = m.betProbabilities(&v)
+				p = m.responseProbabilities(&v)
 			} else {
 				key := riverPolicyKey{nodeID, handclass.Of(v.Hand[:])}
 				var found bool
 				p, found = cache[key]
 				if !found {
-					p = m.betProbabilities(&v)
+					p = m.responseProbabilities(&v)
 					cache[key] = p
 				}
 			}

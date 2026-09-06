@@ -1,30 +1,40 @@
 package cfr
 
 import (
+	"sync/atomic"
+
 	"github.com/nuttakit/2-7-bot/internal/handclass"
 )
 
-// policyMemo is a direct-mapped prediction cache, private to one goroutine.
+// policyMemo is a direct-mapped prediction cache shared by every walker.
 // Every feature the model reads is a function of the public node, the draw
 // record, the last aggressor and the hand class, so a prediction keyed on
 // those is exact; only the sampling draw (View.Rand) varies between calls,
 // and it is applied after lookup. A collision simply evicts: this is a
 // cache, and a miss costs one forest walk.
+//
+// Entries are written value first and key last, with the key cleared
+// before the value changes; a reader that sees the same key before and
+// after copying the value has a consistent entry. Two walkers computing the
+// same miss store identical values, so a race between them is harmless.
 type policyMemo struct {
-	keys []uint64
-	vals [][6]float32
+	entries []memoEntry
+	bits    uint
 }
 
-const memoBits = 22
+type memoEntry struct {
+	key  atomic.Uint64
+	vals [6]float32
+}
+
+const memoBits = 25
 
 func newPolicyMemo(bits uint) *policyMemo {
-	n := uint64(1) << bits
-	return &policyMemo{keys: make([]uint64, n), vals: make([][6]float32, n)}
+	return &policyMemo{entries: make([]memoEntry, 1<<bits), bits: bits}
 }
 
-// WithMemo returns a model sharing this one's forests but with its own
-// prediction cache. Training gives one to each walker; the cache is not
-// safe to share.
+// WithMemo returns a model sharing this one's forests and a prediction
+// cache. Every walker may share the returned model.
 func (m *Empirical) WithMemo() Model {
 	c := &Empirical{Version: m.Version, Betting: m.Betting, Drawing: m.Drawing,
 		BettingForest: m.BettingForest, DrawingForest: m.DrawingForest, compiled: m.compile()}
@@ -66,18 +76,22 @@ func (pm *policyMemo) lookup(v *View, draw bool, compute func(*View) [6]float64)
 	if !ok {
 		return compute(v)
 	}
-	i := (key * 0x9E3779B97F4A7C15) >> (64 - memoBits)
-	if pm.keys[i] == key {
-		var out [6]float64
-		for k, x := range pm.vals[i] {
-			out[k] = float64(x)
+	e := &pm.entries[(key*0x9E3779B97F4A7C15)>>(64-pm.bits)]
+	if e.key.Load() == key {
+		vals := e.vals
+		if e.key.Load() == key {
+			var out [6]float64
+			for k, x := range vals {
+				out[k] = float64(x)
+			}
+			return out
 		}
-		return out
 	}
 	p := compute(v)
-	pm.keys[i] = key
+	e.key.Store(0)
 	for k, x := range p {
-		pm.vals[i][k] = float32(x)
+		e.vals[k] = float32(x)
 	}
+	e.key.Store(key)
 	return p
 }

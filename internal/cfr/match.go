@@ -4,6 +4,7 @@ import (
 	"math"
 	"math/rand/v2"
 
+	"github.com/nuttakit/2-7-bot/internal/cards"
 	"github.com/nuttakit/2-7-bot/internal/deuce"
 )
 
@@ -21,13 +22,32 @@ type Result struct {
 // is one sample. Every model decision that comes back not-ok falls to the
 // fallback model, the way the runtime falls to the heuristic policy.
 func Simulate(t *Tree, eval deuce.Table, a, b, fallback Model, n int, seed uint64) Result {
+	return SimulateFixed(t, eval, a, b, fallback, n, seed, nil, false)
+}
+
+// SimulateFixed is Simulate with a card dealt to the big blind every hand,
+// matching the arena's constant first card (State.DealFixed): the given
+// card, or with random set a fresh one per deck. The button's views carry
+// the card's group, as a bot that has identified it would play.
+func SimulateFixed(t *Tree, eval deuce.Table, a, b, fallback Model, n int, seed uint64, fixed *cards.Card, random bool) Result {
 	counts := [2]*countedModel{{Model: a}, {Model: b}}
 	a, b = counts[0], counts[1]
 	rng := rand.New(rand.NewPCG(seed, 1))
 	var state State
 	sum, sumSq := 0.0, 0.0
 	for i := 0; i < n; i++ {
-		state.Deal(rng)
+		state.FixedGroup = 0
+		switch {
+		case random:
+			card := cards.CardFromIndex(rng.IntN(cards.DeckSize))
+			state.DealFixed(rng, card)
+			state.FixedGroup = FixedGroup(card.Rank)
+		case fixed != nil:
+			state.DealFixed(rng, *fixed)
+			state.FixedGroup = FixedGroup(fixed.Rank)
+		default:
+			state.Deal(rng)
+		}
 		first := playHand(t, eval, &state, [2]Model{a, b}, fallback, rng)
 		state.Reset()
 		second := playHand(t, eval, &state, [2]Model{b, a}, fallback, rng)

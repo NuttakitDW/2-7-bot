@@ -17,6 +17,17 @@ func TestModelBettingProfileRunsWireSession(t *testing.T) {
 	}
 }
 
+func TestLearnedProfilesRunWireSession(t *testing.T) {
+	old := playerProfile
+	t.Cleanup(func() { playerProfile = old })
+	for _, profile := range []string{"learned", "learned-bayes"} {
+		playerProfile = profile
+		for hero := 0; hero < 2; hero++ {
+			t.Run(fmt.Sprint(profile, hero), func(t *testing.T) { playProtocolSession(t, hero) })
+		}
+	}
+}
+
 func TestUnknownPlayerProfileFailsBeforeJoining(t *testing.T) {
 	old := playerProfile
 	playerProfile = "typo"

@@ -22,17 +22,20 @@ func (tr *Trainer) Extract(minVisits uint32) *Blueprint {
 	tr.mu.Lock()
 	defer tr.mu.Unlock()
 	bp := &Blueprint{Bet: make([]uint8, tr.Layout.BetSlots), Draw: make([]uint8, tr.Layout.DrawSlots)}
-	for i := range tr.Tree.Nodes {
-		node := &tr.Tree.Nodes[i]
-		if node.Kind != KindBet {
-			continue
-		}
-		n := int64(len(node.Acts))
-		sets := int64(BetContexts(int(node.Street))) * int64(tr.Layout.Buckets(int(node.Street)))
-		for set := int64(0); set < sets; set++ {
-			slot := node.Offset + set*n
-			if tr.BetVisits[slot] >= minVisits {
-				quantise(tr.BetStrat[slot:slot+n], bp.Bet[slot:slot+n])
+	for group := 0; group < tr.Layout.FixedGroups; group++ {
+		base, _ := tr.Layout.GroupBase(group)
+		for i := range tr.Tree.Nodes {
+			node := &tr.Tree.Nodes[i]
+			if node.Kind != KindBet || (group > 0 && node.Actor != Btn) {
+				continue
+			}
+			n := int64(len(node.Acts))
+			sets := int64(BetContexts(int(node.Street))) * int64(tr.Layout.Buckets(int(node.Street)))
+			for set := int64(0); set < sets; set++ {
+				slot := base + node.Offset + set*n
+				if tr.BetVisits[slot] >= minVisits {
+					quantise(tr.BetStrat[slot:slot+n], bp.Bet[slot:slot+n])
+				}
 			}
 		}
 	}
@@ -136,7 +139,7 @@ type Player struct {
 func (pl *Player) Bet(v *View) (int, bool) {
 	node := &pl.Tree.Nodes[v.Node]
 	class := Class(v.Hand[:])
-	slot := pl.Layout.BetSlot(node, BetContext(v.Seat, v.Street, &v.Drawn), pl.Abs.Bucket(v.Street, class))
+	slot := pl.Layout.BetSlotFixed(node, BetContext(v.Seat, v.Street, &v.Drawn), pl.Abs.Bucket(v.Street, class), v.FixedGroup)
 	probs := pl.BP.Bet[slot : slot+int64(len(node.Acts))]
 	i, ok := pl.choose(probs, v.Rand)
 	if !ok {
@@ -148,8 +151,8 @@ func (pl *Player) Bet(v *View) (int, bool) {
 // Draw samples a keep mask; ok is false for an untrained set.
 func (pl *Player) Draw(v *View) (uint8, bool) {
 	info := &pl.Abs.Classes[Class(v.Hand[:])]
-	slot := pl.Layout.DrawSlot(v.Street, v.Seat, AggrState(v.Seat, v.LastAggr),
-		DrawContext(v.Seat, v.Street, &v.Drawn), int(info.DrawClass))
+	slot := pl.Layout.DrawSlotFixed(v.Street, v.Seat, AggrState(v.Seat, v.LastAggr),
+		DrawContext(v.Seat, v.Street, &v.Drawn), int(info.DrawClass), v.FixedGroup)
 	probs := pl.BP.Draw[slot : slot+int64(info.NumCand)]
 	i, ok := pl.choose(probs, v.Rand)
 	if !ok {
@@ -195,7 +198,7 @@ func (pl *Player) choose(probs []uint8, u float64) (int, bool) {
 // inspection.
 func (pl *Player) Probabilities(v *View) []float64 {
 	node := &pl.Tree.Nodes[v.Node]
-	slot := pl.Layout.BetSlot(node, BetContext(v.Seat, v.Street, &v.Drawn), pl.Abs.Bucket(v.Street, Class(v.Hand[:])))
+	slot := pl.Layout.BetSlotFixed(node, BetContext(v.Seat, v.Street, &v.Drawn), pl.Abs.Bucket(v.Street, Class(v.Hand[:])), v.FixedGroup)
 	probs := pl.BP.Bet[slot : slot+int64(len(node.Acts))]
 	out := make([]float64, len(probs))
 	for i, p := range probs {

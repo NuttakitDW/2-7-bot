@@ -33,12 +33,15 @@ const lost = -1
 type Bot struct {
 	Table  *table.Table
 	tree   *cfr.Tree
-	player *cfr.Player
+	player cfr.Model
 	rng    *rand.Rand
 
 	node     int32
 	lastAggr int
 	drawn    [2]cfr.DrawCounts
+	// fixed identifies the arena's constant big-blind card from our own
+	// big-blind hands; the button then plays that card's strategy group.
+	fixed cfr.FixedCard
 	// Fallbacks counts decisions the heuristic took, for diagnostics.
 	Fallbacks int
 }
@@ -50,8 +53,20 @@ func NewGreedy() (*Bot, error) {
 	if err != nil {
 		return nil, err
 	}
-	b.player.Greedy = true
+	b.player.(*cfr.Player).Greedy = true
 	return b, nil
+}
+
+// NewModel plays an arbitrary strategy through the same tracker: a fitted
+// opponent model, for sparring against a stand-in on the real engine.
+func NewModel(m cfr.Model) *Bot {
+	return &Bot{
+		Table:  table.New(),
+		tree:   cfr.BuildTree(),
+		player: m,
+		rng:    rand.New(rand.NewPCG(rand.Uint64(), rand.Uint64())),
+		node:   lost,
+	}
 }
 
 // New decodes the embedded blueprint. It fails only on a build whose
@@ -74,7 +89,10 @@ func New() (*Bot, error) {
 }
 
 // Hello records the match parameters.
-func (b *Bot) Hello(msg wire.Message) { b.Table.Hello(msg) }
+func (b *Bot) Hello(msg wire.Message) {
+	b.Table.Hello(msg)
+	b.fixed = cfr.FixedCard{}
+}
 
 // HandStart resets the tracker at the tree's root.
 func (b *Bot) HandStart(msg wire.Message) {
@@ -102,6 +120,11 @@ func (b *Bot) Observe(event wire.Event) {
 		// The tree assumes the button is seat 0, as the arena guarantees.
 		if event.Button != cfr.Btn {
 			b.node = lost
+		}
+
+	case wire.EventDealHole:
+		if event.Seat == b.Table.Hand.Seat && event.Seat == cfr.BB && len(event.Cards) == 5 {
+			b.fixed.ObserveBigBlind(cards.NewSet(event.Cards))
 		}
 
 	case wire.EventActed:
@@ -181,6 +204,16 @@ func (b *Bot) propose(decision wire.Decision) (wire.Action, bool) {
 	view := cfr.View{Seat: hand.Seat, Node: b.node, Street: int(node.Street),
 		Drawn: b.drawn, LastAggr: b.lastAggr, Rand: b.rng.Float64()}
 	copy(view.Hand[:], sorted)
+	if hand.Seat == cfr.Btn {
+		view.FixedGroup = b.fixed.Group()
+	}
+	if node.Kind == cfr.KindBet {
+		view.Pot = node.Commit[0] + node.Commit[1]
+		view.ToCall = max(0, node.Commit[1-hand.Seat]-node.Commit[hand.Seat])
+		view.Facing = node.Facing
+		view.Wagers = int(node.Wagers)
+		view.CanRaise = node.Acts[len(node.Acts)-1] == cfr.Aggr
+	}
 
 	switch decision.Kind {
 	case wire.DecisionWager:
