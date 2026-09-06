@@ -28,7 +28,7 @@ func (tr *Trainer) Extract(minVisits uint32) *Blueprint {
 			continue
 		}
 		n := int64(len(node.Acts))
-		sets := int64(BetContexts(int(node.Street))) * int64(Buckets(int(node.Street)))
+		sets := int64(BetContexts(int(node.Street))) * int64(tr.Layout.Buckets(int(node.Street)))
 		for set := int64(0); set < sets; set++ {
 			slot := node.Offset + set*n
 			if tr.BetVisits[slot] >= minVisits {
@@ -127,6 +127,9 @@ type Player struct {
 	Layout *Layout
 	BP     *Blueprint
 	Purify float64
+	// Greedy selects the most likely trained action. This is an evaluated
+	// response experiment, not an equilibrium-preserving transformation.
+	Greedy bool
 }
 
 // Bet samples a betting action; ok is false for an untrained set.
@@ -156,6 +159,15 @@ func (pl *Player) Draw(v *View) (uint8, bool) {
 }
 
 func (pl *Player) choose(probs []uint8, u float64) (int, bool) {
+	if pl.Greedy {
+		best := 0
+		for i, p := range probs {
+			if p > probs[best] {
+				best = i
+			}
+		}
+		return best, len(probs) > 0 && probs[best] > 0
+	}
 	floor := uint8(pl.Purify * 255)
 	total := 0
 	for _, p := range probs {

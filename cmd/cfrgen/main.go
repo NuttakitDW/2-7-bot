@@ -36,6 +36,8 @@ func main() {
 		err = stats(os.Args[2:])
 	case "probe":
 		err = probe(os.Args[2:])
+	case "refine":
+		err = refine(os.Args[2:])
 	default:
 		err = fmt.Errorf("unknown command %q", os.Args[1])
 	}
@@ -73,6 +75,27 @@ func (w *world) load(path string, purify float64) (*cfr.Player, error) {
 
 // model resolves an opponent name: a heuristic, or a blueprint file.
 func (w *world) model(name string, purify float64) (cfr.Model, error) {
+	if path, mode := strings.CutPrefix(name, "mode:"); mode {
+		if !strings.HasSuffix(path, ".json") {
+			return nil, fmt.Errorf("mode requires an empirical JSON model")
+		}
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return nil, err
+		}
+		m, err := cfr.DecodeEmpirical(raw)
+		if err != nil {
+			return nil, err
+		}
+		return m.Mode(), nil
+	}
+	if strings.HasSuffix(name, ".json") {
+		raw, err := os.ReadFile(name)
+		if err != nil {
+			return nil, err
+		}
+		return cfr.DecodeEmpirical(raw)
+	}
 	switch name {
 	case "cobalt":
 		return cfr.Heuristic{Cobalt: true}, nil
@@ -87,22 +110,30 @@ func (w *world) model(name string, purify float64) (cfr.Model, error) {
 func train(args []string) error {
 	fs := flag.NewFlagSet("train", flag.ContinueOnError)
 	iters := fs.Int64("iters", 1_000_000, "hands to walk")
-	workers := fs.Int("workers", 1, "walkers (serialized; use 1 for reproducibility)")
+	workers := fs.Int("workers", 1, "concurrent walkers; use 1 for reproducibility")
 	seed := fs.Uint64("seed", 1, "PCG seed")
 	out := fs.String("out", "blueprint.bin.gz", "blueprint output path")
 	every := fs.Duration("every", 10*time.Minute, "checkpoint interval")
-	modelName := fs.String("model", "", "fixed opponent: cobalt, h3 or a blueprint file")
+	modelName := fs.String("model", "", "fixed opponent: cobalt, h3, blueprint, empirical JSON, or mode:FILE.json")
 	weight := fs.Float64("weight", 0, "fraction of opponent decisions the model plays")
+	modelScope := fs.String("model-scope", "decision", "sample the fixed model per decision or per hand")
 	minVisits := fs.Uint("minvisits", 20, "prune sets visited fewer times than this")
 	statePath := fs.String("state", "", "raw table checkpoint to write alongside the blueprint")
 	resume := fs.String("resume", "", "raw table checkpoint to start from")
 	resetAvg := fs.Bool("resetavg", false, "with -resume: drop the accumulated average, keep the regrets")
+	regret := fs.String("regret", "plus", "regret update: plus or vanilla (signed)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 
 	if *iters <= 0 || *workers <= 0 || *every <= 0 {
 		return fmt.Errorf("iters, workers and checkpoint interval must be positive")
+	}
+	if *regret != "plus" && *regret != "vanilla" {
+		return fmt.Errorf("regret must be plus or vanilla")
+	}
+	if *modelScope != "decision" && *modelScope != "hand" {
+		return fmt.Errorf("model-scope must be decision or hand")
 	}
 	if *weight < 0 || *weight > 1 || math.IsNaN(*weight) {
 		return fmt.Errorf("weight must be between 0 and 1")
@@ -116,7 +147,9 @@ func train(args []string) error {
 		return err
 	}
 	tr := cfr.NewTrainer(w.tree, w.abs, w.layout, w.eval)
+	tr.Vanilla = *regret == "vanilla"
 	tr.Model, tr.ModelWeight = model, *weight
+	tr.ModelByHand = *modelScope == "hand"
 	if *resume != "" {
 		if err := tr.LoadState(*resume); err != nil {
 			return err
@@ -129,10 +162,11 @@ func train(args []string) error {
 			clear(tr.DrawVisits)
 		}
 	}
-	fmt.Fprintf(os.Stderr, "tables: %d bet slots, %d draw slots; model=%q weight=%.2f\n",
-		w.layout.BetSlots, w.layout.DrawSlots, *modelName, *weight)
+	fmt.Fprintf(os.Stderr, "tables: %d bet slots, %d draw slots; model=%q weight=%.2f scope=%s regret=%s\n",
+		w.layout.BetSlots, w.layout.DrawSlots, *modelName, *weight, *modelScope, *regret)
 
 	done, stopped := make(chan struct{}), make(chan struct{})
+	initialIterations := tr.Iterations()
 	go func() {
 		defer close(stopped)
 		start := time.Now()
@@ -145,7 +179,7 @@ func train(args []string) error {
 			case <-ticker.C:
 				n := tr.Iterations()
 				fmt.Fprintf(os.Stderr, "%s: %d iterations, %.0f/s\n", time.Since(start).Round(time.Second), n,
-					float64(n)/time.Since(start).Seconds())
+					float64(n-initialIterations)/time.Since(start).Seconds())
 				if err := save(tr, *out, *statePath, uint32(*minVisits)); err != nil {
 					fmt.Fprintln(os.Stderr, "checkpoint:", err)
 				}
@@ -156,7 +190,7 @@ func train(args []string) error {
 	tr.Run(*iters, *workers, *seed)
 	close(done)
 	<-stopped
-	fmt.Fprintf(os.Stderr, "done: %d iterations in %s\n", tr.Iterations(), time.Since(start).Round(time.Second))
+	fmt.Fprintf(os.Stderr, "done: %d new iterations (%d total) in %s\n", tr.Iterations()-initialIterations, tr.Iterations(), time.Since(start).Round(time.Second))
 	return save(tr, *out, *statePath, uint32(*minVisits))
 }
 
@@ -184,10 +218,11 @@ func save(tr *cfr.Trainer, path, statePath string, minVisits uint32) error {
 func eval(args []string) error {
 	fs := flag.NewFlagSet("eval", flag.ContinueOnError)
 	bpPath := fs.String("bp", "", "hero: cobalt, h3 or a blueprint file")
-	vs := fs.String("vs", "cobalt", "opponent: cobalt, h3 or a blueprint file")
+	vs := fs.String("vs", "cobalt", "opponent: cobalt, h3, blueprint, empirical JSON, or mode:FILE.json")
 	hands := fs.Int("hands", 100_000, "decks to play, each twice")
 	seed := fs.Uint64("seed", 7, "deal seed")
 	purify := fs.Float64("purify", 0, "drop actions under this probability")
+	greedy := fs.Bool("greedy", false, "hero uses the most likely trained action")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -201,6 +236,13 @@ func eval(args []string) error {
 	hero, err := w.model(*bpPath, *purify)
 	if err != nil {
 		return err
+	}
+	if *greedy {
+		player, ok := hero.(*cfr.Player)
+		if !ok {
+			return fmt.Errorf("greedy requires a blueprint hero")
+		}
+		player.Greedy = true
 	}
 	villain, err := w.model(*vs, *purify)
 	if err != nil {
@@ -234,7 +276,7 @@ func stats(args []string) error {
 				continue
 			}
 			n := int64(len(node.Acts))
-			count := int64(cfr.BetContexts(street)) * int64(cfr.Buckets(street))
+			count := int64(cfr.BetContexts(street)) * int64(w.layout.Buckets(street))
 			for set := int64(0); set < count; set++ {
 				sets++
 				slot := node.Offset + set*n

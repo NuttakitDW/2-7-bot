@@ -11,6 +11,13 @@ GAME  ?= 27td-fl
 HANDS ?= 100
 BOT   ?= ./bin/bot
 
+# Fixed pre-draw profiles for controlled experiments. Replace completed test
+# entries on Arena to avoid accumulating bots; defaults keep the original policy.
+ONYX_OPEN ?= baseline
+ONYX_DEFENSE ?= original
+ONYX_LDFLAGS = -X github.com/nuttakit/2-7-bot/internal/onyx.predrawProfile=$(ONYX_OPEN) \
+	-X github.com/nuttakit/2-7-bot/internal/onyx.predrawDefense=$(ONYX_DEFENSE)
+
 .PHONY: help arena bot bot-release test fmt vet docs-check engine spar
 
 help:
@@ -28,15 +35,15 @@ arena:
 
 # For sparring: a host-native build, so the local engine can spawn it.
 bot:
-	go build -o bin/bot ./cmd/bot
+	go build -ldflags='$(ONYX_LDFLAGS)' -o bin/bot ./cmd/bot
 
 # The upload artifact. One static Linux x86-64 ELF, named for the bot
 # (docs/naming.md) because `arena upload --name` defaults to the filename.
-BOT_NAME ?= 2-7-lapis-2
+BOT_NAME ?= 2-7-onyx-10
 
 bot-release:
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-	  go build -trimpath -ldflags='-s -w' -o bin/$(BOT_NAME) ./cmd/bot
+	  go build -trimpath -ldflags='-s -w $(ONYX_LDFLAGS)' -o bin/$(BOT_NAME) ./cmd/bot
 
 test:
 	go test ./...

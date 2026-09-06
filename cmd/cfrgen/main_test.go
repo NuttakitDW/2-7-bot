@@ -7,6 +7,8 @@ func TestTrainRejectsInvalidSettings(t *testing.T) {
 		{"-iters", "0"}, {"-workers", "0"}, {"-every", "0s"},
 		{"-weight", "-1"}, {"-weight", "1.1"}, {"-weight", "NaN"},
 		{"-weight", "1"},
+		{"-regret", "invalid"},
+		{"-model-scope", "invalid"},
 	} {
 		if err := train(args); err == nil {
 			t.Errorf("train(%v) accepted invalid settings", args)

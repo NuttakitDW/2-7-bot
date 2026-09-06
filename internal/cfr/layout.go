@@ -18,7 +18,9 @@ type Layout struct {
 	BetSlots  int64
 	DrawSlots int64
 	// drawClasses is the draw-class count the draw index arithmetic uses.
-	drawClasses int64
+	drawClasses  int64
+	finalBuckets int
+	drawBuckets  int
 }
 
 // Context sizes: draw counts clip at three, four values per reading.
@@ -31,9 +33,24 @@ const (
 	aggrStates  = 3 // nobody, the drawer, the opponent bet last
 )
 
+// layoutProfile is fixed at build time. Compact layouts deliberately forget
+// earlier betting order when the current contributions and action state match.
+var layoutProfile = "history"
+
 // NewLayout assigns every betting node its offset and sizes the tables.
 func NewLayout(t *Tree, a *Abstraction) *Layout {
-	l := &Layout{drawClasses: int64(a.NumDrawClasses)}
+	switch layoutProfile {
+	case "history", "history-rich":
+		return newHistoryLayout(t, a)
+	case "compact", "compact-rich":
+		return newCompactLayout(t, a)
+	default:
+		panic("unknown CFR layout profile: " + layoutProfile)
+	}
+}
+
+func newHistoryLayout(t *Tree, a *Abstraction) *Layout {
+	l := &Layout{drawClasses: int64(a.NumDrawClasses), finalBuckets: a.FinalBuckets, drawBuckets: a.DrawBuckets}
 	var offset int64
 	for i := range t.Nodes {
 		node := &t.Nodes[i]
@@ -41,10 +58,42 @@ func NewLayout(t *Tree, a *Abstraction) *Layout {
 			continue
 		}
 		node.Offset = offset
-		offset += int64(BetContexts(int(node.Street))) * int64(Buckets(int(node.Street))) * int64(len(node.Acts))
+		offset += int64(BetContexts(int(node.Street))) * int64(l.Buckets(int(node.Street))) * int64(len(node.Acts))
 	}
 	l.BetSlots = offset
 	l.DrawSlots = int64(Streets-1) * 2 * aggrStates * drawCtx * l.drawClasses * MaxCand
+	return l
+}
+
+func newCompactLayout(t *Tree, a *Abstraction) *Layout {
+	l := newHistoryLayout(t, a)
+	type key struct {
+		street, actor uint8
+		wagers        int32
+		commit        [2]int32
+		facing        bool
+		predrawNode   int
+	}
+	offsets := map[key]int64{}
+	var slots int64
+	for i := range t.Nodes {
+		n := &t.Nodes[i]
+		if n.Kind != KindBet {
+			continue
+		}
+		k := key{street: n.Street, actor: n.Actor, wagers: n.Wagers, commit: n.Commit, facing: n.Facing}
+		if n.Street == Predraw {
+			k.predrawNode = i + 1
+		}
+		offset, ok := offsets[k]
+		if !ok {
+			offset = slots
+			offsets[k] = offset
+			slots += int64(BetContexts(int(n.Street)) * l.Buckets(int(n.Street)) * len(n.Acts))
+		}
+		n.Offset = offset
+	}
+	l.BetSlots = slots
 	return l
 }
 
@@ -71,6 +120,17 @@ func Buckets(street int) int {
 	default:
 		return NumDrawBuckets
 	}
+}
+
+// Buckets reports the count for this layout, including any river refinement.
+func (l *Layout) Buckets(street int) int {
+	if (street == Draw1 || street == Draw2) && l.drawBuckets > 0 {
+		return l.drawBuckets
+	}
+	if street == Draw3 && l.finalBuckets > 0 {
+		return l.finalBuckets
+	}
+	return Buckets(street)
 }
 
 // Bucket is the hand's bucket on a street, from its class.
@@ -138,7 +198,7 @@ func AggrState(p int, lastAggr int) int {
 
 // BetSlot is the first slot of a betting set.
 func (l *Layout) BetSlot(node *Node, ctx, bucket int) int64 {
-	return node.Offset + int64(ctx*Buckets(int(node.Street))+bucket)*int64(len(node.Acts))
+	return node.Offset + int64(ctx*l.Buckets(int(node.Street))+bucket)*int64(len(node.Acts))
 }
 
 // DrawSlot is the first slot of a draw set; the set holds MaxCand slots.

@@ -23,16 +23,23 @@ import (
 // establish equilibrium convergence or an exploitability bound.
 // Targeted runs average in separate passes that sample the learned policy.
 //
-// Updates and snapshots are serialized at iteration boundaries. Use one
-// worker for reproducible training; extra workers do not increase throughput.
+// Workers share tables through short information-set locks. Snapshots wait
+// for in-flight iterations. Multiple workers perform asynchronous updates;
+// use one worker for reproducible serial training.
 type Trainer struct {
 	Tree   *Tree
 	Abs    *Abstraction
 	Layout *Layout
 	Eval   deuce.Table
 
+	// Vanilla retains signed cumulative regrets; false keeps the legacy
+	// regret-matching+ update. Configure before starting workers.
+	Vanilla     bool
 	Model       Model
 	ModelWeight float64
+	// ModelByHand samples a fixed opponent type once per traverser walk.
+	// False retains the original decision-wise mixture. Set before Run.
+	ModelByHand bool
 
 	BetRegret  []float64
 	BetStrat   []float64
@@ -44,7 +51,8 @@ type Trainer struct {
 	BetVisits  []uint32
 	DrawVisits []uint32
 
-	mu         sync.Mutex
+	mu         sync.RWMutex
+	setMu      [16384]sync.Mutex
 	iterations atomic.Int64
 }
 
@@ -73,13 +81,20 @@ func (tr *Trainer) Run(n int64, workers int, seed uint64) {
 			defer wg.Done()
 			worker := &worker{tr: tr, rng: rand.New(rand.NewPCG(seed, uint64(w)))}
 			for {
-				tr.mu.Lock()
-				if tr.iterations.Load() >= n {
-					tr.mu.Unlock()
-					return
+				tr.mu.RLock()
+				var iteration int64
+				for {
+					iteration = tr.iterations.Load()
+					if iteration >= n {
+						tr.mu.RUnlock()
+						return
+					}
+					if tr.iterations.CompareAndSwap(iteration, iteration+1) {
+						break
+					}
 				}
-				worker.iterate()
-				tr.mu.Unlock()
+				worker.iterate(float64(iteration + 1))
+				tr.mu.RUnlock()
 			}
 		}(w)
 	}
@@ -87,17 +102,18 @@ func (tr *Trainer) Run(n int64, workers int, seed uint64) {
 }
 
 type worker struct {
-	tr          *Trainer
-	rng         *rand.Rand
-	state       State
-	averageOnly bool
+	tr            *Trainer
+	rng           *rand.Rand
+	state         State
+	averageOnly   bool
+	fixedOpponent bool
 }
 
-func (w *worker) iterate() {
-	t := float64(w.tr.iterations.Add(1))
+func (w *worker) iterate(t float64) {
 	w.state.Deal(w.rng)
 	for traverser := 0; traverser < 2; traverser++ {
 		w.state.Reset()
+		w.selectOpponent()
 		w.walk(w.tr.Tree.Root, traverser, t)
 	}
 	if w.tr.Model != nil && w.tr.ModelWeight > 0 {
@@ -134,6 +150,7 @@ func (w *worker) walkBet(id int32, node *Node, traverser int, t float64) float64
 	slot := w.tr.Layout.BetSlot(node, BetContext(p, street, &w.state.Drawn), w.tr.Abs.Bucket(street, class))
 	n := len(node.Acts)
 	regret := w.tr.BetRegret[slot : slot+int64(n)]
+	lock := w.tr.setLock(false, slot)
 
 	if p != traverser {
 		var a int
@@ -143,6 +160,7 @@ func (w *worker) walkBet(id int32, node *Node, traverser int, t float64) float64
 			a = actionIndex(node, action, ok)
 		} else {
 			var sigma [3]float64
+			lock.Lock()
 			matchRegrets(regret, sigma[:n])
 			strat := w.tr.BetStrat[slot : slot+int64(n)]
 			if w.recordAverage() {
@@ -151,13 +169,16 @@ func (w *worker) walkBet(id int32, node *Node, traverser int, t float64) float64
 				}
 				w.tr.BetVisits[slot]++
 			}
+			lock.Unlock()
 			a = sample(sigma[:n], w.rng)
 		}
 		return w.step(node, a, traverser, t)
 	}
 
 	var sigma, values [3]float64
+	lock.Lock()
 	matchRegrets(regret, sigma[:n])
+	lock.Unlock()
 	saved := w.state
 	util := 0.0
 	for a := 0; a < n; a++ {
@@ -165,10 +186,10 @@ func (w *worker) walkBet(id int32, node *Node, traverser int, t float64) float64
 		util += sigma[a] * values[a]
 		w.state = saved
 	}
-	for a := 0; a < n; a++ {
-		if !w.averageOnly {
-			regret[a] = max(regret[a]+values[a]-util, 0)
-		}
+	if !w.averageOnly {
+		lock.Lock()
+		updateRegrets(regret, values[:n], util, w.tr.Vanilla)
+		lock.Unlock()
 	}
 	return util
 }
@@ -189,6 +210,7 @@ func (w *worker) walkDraw(id int32, node *Node, traverser int, t float64) float6
 		DrawContext(p, street, &w.state.Drawn), int(info.DrawClass))
 	n := int(info.NumCand)
 	regret := w.tr.DrawRegret[slot : slot+int64(n)]
+	lock := w.tr.setLock(true, slot)
 
 	if p != traverser {
 		if w.useModel() {
@@ -201,6 +223,7 @@ func (w *worker) walkDraw(id int32, node *Node, traverser int, t float64) float6
 			return w.walk(node.Next[0], traverser, t)
 		}
 		var sigma [MaxCand]float64
+		lock.Lock()
 		matchRegrets(regret, sigma[:n])
 		strat := w.tr.DrawStrat[slot : slot+int64(n)]
 		if w.recordAverage() {
@@ -209,12 +232,15 @@ func (w *worker) walkDraw(id int32, node *Node, traverser int, t float64) float6
 			}
 			w.tr.DrawVisits[slot]++
 		}
+		lock.Unlock()
 		w.state.Apply(p, street, info.Keep[sample(sigma[:n], w.rng)])
 		return w.walk(node.Next[0], traverser, t)
 	}
 
 	var sigma, values [MaxCand]float64
+	lock.Lock()
 	matchRegrets(regret, sigma[:n])
+	lock.Unlock()
 	saved := w.state
 	util := 0.0
 	for c := 0; c < n; c++ {
@@ -223,16 +249,34 @@ func (w *worker) walkDraw(id int32, node *Node, traverser int, t float64) float6
 		util += sigma[c] * values[c]
 		w.state = saved
 	}
-	for c := 0; c < n; c++ {
-		if !w.averageOnly {
-			regret[c] = max(regret[c]+values[c]-util, 0)
-		}
+	if !w.averageOnly {
+		lock.Lock()
+		updateRegrets(regret, values[:n], util, w.tr.Vanilla)
+		lock.Unlock()
 	}
 	return util
 }
 
+func (tr *Trainer) setLock(draw bool, slot int64) *sync.Mutex {
+	i := int((uint64(slot) * 11400714819323198485) >> 51)
+	if draw {
+		i += 8192
+	}
+	return &tr.setMu[i]
+}
+
 func (w *worker) useModel() bool {
+	if w.tr.ModelByHand && w.tr.ModelWeight > 0 && w.tr.ModelWeight < 1 {
+		return !w.averageOnly && w.fixedOpponent
+	}
 	return !w.averageOnly && w.tr.Model != nil && (w.tr.ModelWeight >= 1 || w.rng.Float64() < w.tr.ModelWeight)
+}
+
+func (w *worker) selectOpponent() {
+	if !w.tr.ModelByHand {
+		return
+	}
+	w.fixedOpponent = w.tr.Model != nil && w.tr.ModelWeight > 0 && (w.tr.ModelWeight >= 1 || w.rng.Float64() < w.tr.ModelWeight)
 }
 
 // actionIndex finds a model's answer among the node's legal actions,
@@ -253,12 +297,21 @@ func actionIndex(node *Node, action int, ok bool) int {
 	return 0
 }
 
-// matchRegrets is regret matching over non-negative regrets: proportional
-// where any is positive, uniform otherwise.
+func updateRegrets(regret, values []float64, utility float64, vanilla bool) {
+	for i := range regret {
+		regret[i] = regret[i] + values[i] - utility
+		if !vanilla {
+			regret[i] = max(regret[i], 0)
+		}
+	}
+}
+
+// matchRegrets uses only the positive part of cumulative regret, and is
+// uniform when no action has positive regret.
 func matchRegrets(regret []float64, sigma []float64) {
 	total := 0.0
 	for _, r := range regret {
-		total += r
+		total += max(r, 0)
 	}
 	if total <= 0 {
 		for i := range sigma {
@@ -267,7 +320,7 @@ func matchRegrets(regret []float64, sigma []float64) {
 		return
 	}
 	for i, r := range regret {
-		sigma[i] = r / total
+		sigma[i] = max(r, 0) / total
 	}
 }
 

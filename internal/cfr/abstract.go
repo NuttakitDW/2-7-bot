@@ -38,7 +38,7 @@ type ClassInfo struct {
 	// Keep[i] is candidate i as a bitmask over the hand sorted by rank
 	// (deuce first, suits ascending within a rank): bit p set keeps card p.
 	Keep      [MaxCand]uint8
-	Draw      uint8
+	Draw      uint16
 	Final     uint8
 	DrawClass uint16
 }
@@ -47,12 +47,29 @@ type ClassInfo struct {
 type Abstraction struct {
 	Classes        []ClassInfo
 	NumDrawClasses int
+	FinalBuckets   int
+	DrawBuckets    int
+	finalParents   []uint8
+	drawParents    []uint16
 }
 
 // BuildAbstraction computes the table.
 func BuildAbstraction() *Abstraction {
-	a := &Abstraction{Classes: make([]ClassInfo, handclass.Num)}
+	a := buildAbstraction(layoutProfile == "compact-rich" || layoutProfile == "history-rich")
+	switch handProfile {
+	case "legacy":
+	case "draw-shape":
+		refineDrawingAbstraction(a)
+	default:
+		panic("unknown CFR hand profile: " + handProfile)
+	}
+	return a
+}
+
+func buildAbstraction(rich bool) *Abstraction {
+	a := &Abstraction{Classes: make([]ClassInfo, handclass.Num), FinalBuckets: NumFinalBuckets, DrawBuckets: NumDrawBuckets}
 	drawClasses := map[uint16]uint16{}
+	finalClasses := map[uint32]uint8{}
 	for id := 0; id < handclass.Num; id++ {
 		if handclass.Weight(handclass.ID(id)) == 0 {
 			continue
@@ -63,8 +80,21 @@ func BuildAbstraction() *Abstraction {
 			info.Keep[i] = keepMask(hand, keep)
 			info.NumCand++
 		}
-		info.Draw = drawBucket(hand)
+		info.Draw = uint16(drawBucket(hand))
 		info.Final = finalBucket(hand)
+		if rich {
+			key := richFinalKey(hand)
+			bucket, ok := finalClasses[key]
+			if !ok {
+				if len(finalClasses) >= 256 {
+					panic("river abstraction exceeds uint8 buckets")
+				}
+				bucket = uint8(len(finalClasses))
+				finalClasses[key] = bucket
+				a.finalParents = append(a.finalParents, info.Final)
+			}
+			info.Final = bucket
+		}
 
 		key := uint16(0)
 		for _, rank := range cards.DistinctRanks(hand) {
@@ -79,7 +109,33 @@ func BuildAbstraction() *Abstraction {
 		info.DrawClass = drawClasses[key]
 	}
 	a.NumDrawClasses = len(drawClasses)
+	if rich {
+		a.FinalBuckets = len(finalClasses)
+	}
 	return a
+}
+
+// Keep every ten-or-better low distinct. Weaker no-pair hands split by
+// highest rank, pairs by paired rank, and all remaining hands share a bucket.
+func richFinalKey(hand []cards.Card) uint32 {
+	v := deuce.Eval(hand)
+	switch v.Class() {
+	case deuce.HighCard:
+		top := cards.DistinctRanks(hand)[4]
+		if top <= cards.Ten {
+			return uint32(v)
+		}
+		return 1<<24 | uint32(top)
+	case deuce.OnePair:
+		var counts [13]int
+		for _, c := range hand {
+			counts[c.Rank.Index()]++
+			if counts[c.Rank.Index()] == 2 {
+				return 2<<24 | uint32(c.Rank.Index())
+			}
+		}
+	}
+	return 3 << 24
 }
 
 // keepMask encodes a keep list the way policy.Discards reads it: one card

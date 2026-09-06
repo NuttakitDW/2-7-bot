@@ -7,7 +7,7 @@
 //
 // Build for upload with:
 //
-//	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o bin/2-7-lapis-2 ./cmd/bot
+//	make bot-release
 //
 // The artifact filename is the bot name (docs/naming.md).
 package main
@@ -19,7 +19,7 @@ import (
 	"io"
 	"os"
 
-	"github.com/nuttakit/2-7-bot/internal/lapis"
+	"github.com/nuttakit/2-7-bot/internal/onyx"
 	"github.com/nuttakit/2-7-bot/internal/wire"
 )
 
@@ -40,7 +40,7 @@ func main() {
 
 // run reads arena messages until match-end or EOF.
 func run(input io.Reader, output io.Writer, debug io.Writer) error {
-	bot, err := lapis.New()
+	bot, err := onyx.New()
 	if err != nil {
 		return err
 	}
@@ -59,14 +59,14 @@ func run(input io.Reader, output io.Writer, debug io.Writer) error {
 			// A line we cannot parse is the arena's problem, not a
 			// reason to abandon the match: staying in costs nothing and
 			// leaving forfeits every remaining hand.
-			fmt.Fprintf(debug, "undecodable line: %v\n", err)
+			_, _ = fmt.Fprintf(debug, "undecodable line: %v\n", err)
 			continue
 		}
 
 		switch msg.Type {
 		case wire.MsgHello:
 			bot.Hello(msg)
-			fmt.Fprintf(debug, "hello: %s, %d seats, timeout %dms\n",
+			_, _ = fmt.Fprintf(debug, "hello: %s, %d seats, timeout %dms\n",
 				msg.GameID, msg.SeatCount, bot.Table.Match.TimeoutMs)
 			if err := send(replies, wire.Join()); err != nil {
 				return err
@@ -80,14 +80,14 @@ func run(input io.Reader, output io.Writer, debug io.Writer) error {
 
 		case wire.MsgAct:
 			action := bot.Decide(msg.Decision)
-			fmt.Fprintf(debug, "hand %d street %s: %v -> %s (fallbacks %d)\n",
-				bot.Table.Hand.No, bot.Table.Hand.Label, bot.Table.Hand.Cards, action.Kind, bot.Fallbacks)
+			_, _ = fmt.Fprintf(debug, "hand %d street %s: %v -> %s\n",
+				bot.Table.Hand.No, bot.Table.Hand.Label, bot.Table.Hand.Cards, action.Kind)
 			if err := send(replies, wire.Reply(action)); err != nil {
 				return err
 			}
 
 		case wire.MsgMatchEnd:
-			fmt.Fprintf(debug, "match end: %d heuristic fallbacks\n", bot.Fallbacks)
+			_, _ = fmt.Fprintln(debug, "match end")
 			return nil
 
 		default:
