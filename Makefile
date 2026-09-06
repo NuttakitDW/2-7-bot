@@ -40,7 +40,7 @@ bot:
 
 # The upload artifact. One static Linux x86-64 ELF, named for the bot
 # (docs/naming.md) because `arena upload --name` defaults to the filename.
-BOT_NAME ?= 2-7-onyx-10
+BOT_NAME ?= 2-7-garnet-1
 
 bot-release:
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
@@ -48,14 +48,14 @@ bot-release:
 
 # Generated assets stay in the ignored bin directory. The overlay substitutes
 # them only for this build and leaves the baseline embedded assets untouched.
-MODEL_POLICY ?= bin/onyx-swit-policy-history-large.json.gz
-MODEL_BLUEPRINT ?= bin/onyx-78-blueprint.bin.gz
-MODEL_BOT_NAME ?= 2-7-onyx-158
+MODEL_POLICY ?= bin/swit-all-policy.json.gz
+MODEL_BLUEPRINT ?= bin/garnet.bin.gz
+MODEL_BOT_NAME ?= 2-7-garnet-1
 MODEL_SELECTION ?= mode
-MODEL_PROFILE ?= model-bets
+MODEL_PROFILE ?= learned
 MODEL_ALPHA ?= 1
 MODEL_PARTICLES ?= 512
-MODEL_FIXED ?= none
+MODEL_FIXED ?= button
 MODEL_LDFLAGS = $(ONYX_LDFLAGS) -X main.playerProfile=$(MODEL_PROFILE) \
 	-X github.com/nuttakit/2-7-bot/internal/onyx.modelSelection=$(MODEL_SELECTION) \
 	-X github.com/nuttakit/2-7-bot/internal/onyx.riverResponseAlpha=$(MODEL_ALPHA) \

@@ -86,7 +86,7 @@ func run(input io.Reader, output io.Writer, debug io.Writer) error {
 			}
 
 		case wire.MsgMatchEnd:
-			_, _ = fmt.Fprintf(debug, "match end, %d blueprint fallbacks\n", bot.fallbacks())
+			_, _ = fmt.Fprintf(debug, "match end, %d blueprint fallbacks, fixed card %v\n", bot.fallbacks(), bot.fixedCard())
 			return nil
 
 		default:
@@ -96,6 +96,7 @@ func run(input io.Reader, output io.Writer, debug io.Writer) error {
 	}
 	// EOF without a match-end: the arena closed the pipe. Nothing left to
 	// play, and nothing to complain about.
+	_, _ = fmt.Fprintf(debug, "eof, %d blueprint fallbacks, fixed card %v\n", bot.fallbacks(), bot.fixedCard())
 	return lines.Err()
 }
 

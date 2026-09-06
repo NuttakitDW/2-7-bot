@@ -71,18 +71,32 @@ func (tr *Trainer) LoadState(path string) error {
 	}
 	bets := binary.LittleEndian.Uint64(header[4:])
 	draws := binary.LittleEndian.Uint64(header[12:])
-	if bets != uint64(tr.Layout.BetSlots) || draws != uint64(tr.Layout.DrawSlots) {
+	// A single-group state warm-starts every group of a fixed-card layout:
+	// each card group begins from the strategy that did not know the card.
+	replicate := tr.Layout.FixedGroups > 1 && bets == uint64(tr.Layout.baseBet) && draws == uint64(tr.Layout.baseDraw)
+	if !replicate && (bets != uint64(tr.Layout.BetSlots) || draws != uint64(tr.Layout.DrawSlots)) {
 		return fmt.Errorf("state: %d/%d slots, layout wants %d/%d", bets, draws, tr.Layout.BetSlots, tr.Layout.DrawSlots)
 	}
 	tr.iterations.Store(int64(binary.LittleEndian.Uint64(header[20:])))
-	for _, table := range [][]float64{tr.BetRegret, tr.BetStrat, tr.DrawRegret, tr.DrawStrat} {
+	nb, nd := int(bets), int(draws)
+	for _, table := range [][]float64{tr.BetRegret[:nb], tr.BetStrat[:nb], tr.DrawRegret[:nd], tr.DrawStrat[:nd]} {
 		if err := readFloats(r, table); err != nil {
 			return err
 		}
 	}
-	for _, table := range [][]uint32{tr.BetVisits, tr.DrawVisits} {
+	for _, table := range [][]uint32{tr.BetVisits[:nb], tr.DrawVisits[:nd]} {
 		if err := readWords(r, table); err != nil {
 			return err
+		}
+	}
+	if replicate {
+		for group := 1; group < tr.Layout.FixedGroups; group++ {
+			copy(tr.BetRegret[group*nb:], tr.BetRegret[:nb])
+			copy(tr.BetStrat[group*nb:], tr.BetStrat[:nb])
+			copy(tr.BetVisits[group*nb:], tr.BetVisits[:nb])
+			copy(tr.DrawRegret[group*nd:], tr.DrawRegret[:nd])
+			copy(tr.DrawStrat[group*nd:], tr.DrawStrat[:nd])
+			copy(tr.DrawVisits[group*nd:], tr.DrawVisits[:nd])
 		}
 	}
 	return nil

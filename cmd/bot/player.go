@@ -3,6 +3,8 @@ package main
 import (
 	"fmt"
 
+	"github.com/nuttakit/2-7-bot/internal/cards"
+
 	"github.com/nuttakit/2-7-bot/internal/lapis"
 	"github.com/nuttakit/2-7-bot/internal/onyx"
 	"github.com/nuttakit/2-7-bot/internal/table"
@@ -115,4 +117,12 @@ func (b *runtimeBot) fallbacks() int {
 		return 0
 	}
 	return b.learned.Fallbacks
+}
+
+// fixedCard is the identified constant big-blind card, for diagnostics.
+func (b *runtimeBot) fixedCard() []cards.Card {
+	if b.learned == nil {
+		return nil
+	}
+	return b.learned.FixedCard().Append(nil)
 }

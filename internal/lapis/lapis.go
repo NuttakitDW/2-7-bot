@@ -88,6 +88,9 @@ func New() (*Bot, error) {
 	}, nil
 }
 
+// FixedCard reports the identified constant big-blind card, if any.
+func (b *Bot) FixedCard() cards.Set { return b.fixed.OpponentHolds() }
+
 // Hello records the match parameters.
 func (b *Bot) Hello(msg wire.Message) {
 	b.Table.Hello(msg)
