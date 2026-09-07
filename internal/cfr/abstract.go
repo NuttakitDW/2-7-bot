@@ -37,9 +37,12 @@ type ClassInfo struct {
 	NumCand uint8
 	// Keep[i] is candidate i as a bitmask over the hand sorted by rank
 	// (deuce first, suits ascending within a rank): bit p set keeps card p.
-	Keep      [MaxCand]uint8
+	Keep [MaxCand]uint8
+	// Draw is the betting bucket with draws to come; the equity profile
+	// splits it into Draw for the first street and Draw2 for the second.
 	Draw      uint16
-	Final     uint8
+	Draw2     uint16
+	Final     uint16
 	DrawClass uint16
 }
 
@@ -49,8 +52,11 @@ type Abstraction struct {
 	NumDrawClasses int
 	FinalBuckets   int
 	DrawBuckets    int
-	finalParents   []uint8
-	drawParents    []uint16
+	// Draw2Buckets is the second draw street's own bucket count, 0 when
+	// it shares the first street's.
+	Draw2Buckets int
+	finalParents []uint8
+	drawParents  []uint16
 }
 
 // BuildAbstraction computes the table.
@@ -60,6 +66,8 @@ func BuildAbstraction() *Abstraction {
 	case "legacy":
 	case "draw-shape":
 		refineDrawingAbstraction(a)
+	case "equity":
+		refineEquityAbstraction(a, parseEquityProfile(equityProfile))
 	default:
 		panic("unknown CFR hand profile: " + handProfile)
 	}
@@ -81,7 +89,7 @@ func buildAbstraction(rich bool) *Abstraction {
 			info.NumCand++
 		}
 		info.Draw = uint16(drawBucket(hand))
-		info.Final = finalBucket(hand)
+		info.Final = uint16(finalBucket(hand))
 		if rich {
 			key := richFinalKey(hand)
 			bucket, ok := finalClasses[key]
@@ -91,9 +99,9 @@ func buildAbstraction(rich bool) *Abstraction {
 				}
 				bucket = uint8(len(finalClasses))
 				finalClasses[key] = bucket
-				a.finalParents = append(a.finalParents, info.Final)
+				a.finalParents = append(a.finalParents, uint8(info.Final))
 			}
-			info.Final = bucket
+			info.Final = uint16(bucket)
 		}
 
 		key := uint16(0)

@@ -21,15 +21,20 @@ type Layout struct {
 	BetSlots  int64
 	DrawSlots int64
 	// FixedGroups is how many big-blind-card groups the button's sets are
-	// split into (fixedProfile "button"), 1 when they are not. Group 0
-	// is the button not knowing the card; baseBet and baseDraw are the
-	// size of one group's slice.
-	FixedGroups       int
-	baseBet, baseDraw int64
+	// split into (fixedProfile "button" or "early"), 1 when they are
+	// not. Group 0 is the button not knowing the card; baseBet and
+	// baseDraw are the size of group 0's tables, which "button" repeats
+	// whole per group while "early" appends only the button's predraw
+	// and first-draw sets, earlyBet and earlyDraw slots per group.
+	FixedGroups         int
+	baseBet, baseDraw   int64
+	earlyBet, earlyDraw int64
+	early               bool
 	// drawClasses is the draw-class count the draw index arithmetic uses.
 	drawClasses  int64
 	finalBuckets int
 	drawBuckets  int
+	draw2Buckets int
 }
 
 // Context sizes: draw counts clip at three, four values per reading.
@@ -47,9 +52,14 @@ const (
 var layoutProfile = "history"
 
 // fixedProfile "button" gives the button separate strategy slices per group
-// of the big blind's constant first card (State.DealFixed); "none" keeps a
+// of the big blind's constant first card (State.DealFixed) on every
+// street; "early" only on the predraw and first-draw streets, where the
+// card moves the ranges most, at a fraction of the table; "none" keeps a
 // single strategy.
 var fixedProfile = "none"
+
+// fixedLastStreet is the last street the "early" profile slices.
+const fixedLastStreet = Draw1
 
 // NumFixedGroups counts the big-blind-card groups: unknown, then the
 // deuce through the seven singly, eights with nines, and tens and above.
@@ -84,6 +94,20 @@ func NewLayout(t *Tree, a *Abstraction) *Layout {
 		l.FixedGroups = NumFixedGroups
 		l.BetSlots *= NumFixedGroups
 		l.DrawSlots *= NumFixedGroups
+	case "early":
+		l.FixedGroups, l.early = NumFixedGroups, true
+		var offset int64
+		for i := range t.Nodes {
+			node := &t.Nodes[i]
+			if l.sliced(node) {
+				node.FixedOffset = offset
+				offset += int64(BetContexts(int(node.Street))) * int64(l.Buckets(int(node.Street))) * int64(len(node.Acts))
+			}
+		}
+		l.earlyBet = offset
+		l.earlyDraw = int64(fixedLastStreet-Draw1+1) * 2 * aggrStates * drawCtx * l.drawClasses * MaxCand
+		l.BetSlots += int64(NumFixedGroups-1) * l.earlyBet
+		l.DrawSlots += int64(NumFixedGroups-1) * l.earlyDraw
 	default:
 		panic("unknown CFR fixed-card profile: " + fixedProfile)
 	}
@@ -91,7 +115,7 @@ func NewLayout(t *Tree, a *Abstraction) *Layout {
 }
 
 func newHistoryLayout(t *Tree, a *Abstraction) *Layout {
-	l := &Layout{drawClasses: int64(a.NumDrawClasses), finalBuckets: a.FinalBuckets, drawBuckets: a.DrawBuckets}
+	l := &Layout{drawClasses: int64(a.NumDrawClasses), finalBuckets: a.FinalBuckets, drawBuckets: a.DrawBuckets, draw2Buckets: a.Draw2Buckets}
 	var offset int64
 	for i := range t.Nodes {
 		node := &t.Nodes[i]
@@ -167,6 +191,9 @@ func Buckets(street int) int {
 
 // Buckets reports the count for this layout, including any river refinement.
 func (l *Layout) Buckets(street int) int {
+	if street == Draw2 && l.draw2Buckets > 0 {
+		return l.draw2Buckets
+	}
 	if (street == Draw1 || street == Draw2) && l.drawBuckets > 0 {
 		return l.drawBuckets
 	}
@@ -183,6 +210,11 @@ func (a *Abstraction) Bucket(street, class int) int {
 		return class
 	case Draw3:
 		return int(a.Classes[class].Final)
+	case Draw2:
+		if a.Draw2Buckets > 0 {
+			return int(a.Classes[class].Draw2)
+		}
+		return int(a.Classes[class].Draw)
 	default:
 		return int(a.Classes[class].Draw)
 	}
@@ -244,14 +276,31 @@ func (l *Layout) BetSlot(node *Node, ctx, bucket int) int64 {
 	return node.Offset + int64(ctx*l.Buckets(int(node.Street))+bucket)*int64(len(node.Acts))
 }
 
+// sliced reports whether a node has its own set per big-blind-card
+// group under the "early" profile.
+func (l *Layout) sliced(node *Node) bool {
+	return node.Kind == KindBet && node.Actor == Btn && int(node.Street) <= fixedLastStreet
+}
+
+// Sliced reports whether a node's sets differ between group 0 and group.
+func (l *Layout) Sliced(node *Node, group int) bool {
+	if group <= 0 || group >= l.FixedGroups || node.Actor != Btn {
+		return false
+	}
+	return !l.early || l.sliced(node)
+}
+
 // BetSlotFixed is BetSlot in the button's slice for a big-blind-card
 // group; the big blind's own sets have one slice.
 func (l *Layout) BetSlotFixed(node *Node, ctx, bucket, group int) int64 {
-	slot := l.BetSlot(node, ctx, bucket)
-	if group > 0 && group < l.FixedGroups && node.Actor == Btn {
-		slot += int64(group) * l.baseBet
+	if !l.Sliced(node, group) {
+		return l.BetSlot(node, ctx, bucket)
 	}
-	return slot
+	set := int64(ctx*l.Buckets(int(node.Street))+bucket) * int64(len(node.Acts))
+	if l.early {
+		return l.baseBet + int64(group-1)*l.earlyBet + node.FixedOffset + set
+	}
+	return node.Offset + set + int64(group)*l.baseBet
 }
 
 // DrawSlot is the first slot of a draw set; the set holds MaxCand slots.
@@ -263,13 +312,14 @@ func (l *Layout) DrawSlot(street, p, aggr, ctx, drawClass int) int64 {
 // DrawSlotFixed is DrawSlot in the button's slice for a big-blind-card group.
 func (l *Layout) DrawSlotFixed(street, p, aggr, ctx, drawClass, group int) int64 {
 	slot := l.DrawSlot(street, p, aggr, ctx, drawClass)
-	if group > 0 && group < l.FixedGroups && p == Btn {
-		slot += int64(group) * l.baseDraw
+	if group <= 0 || group >= l.FixedGroups || p != Btn {
+		return slot
 	}
-	return slot
-}
-
-// GroupBase is the first slot of a group's betting and draw slices.
-func (l *Layout) GroupBase(group int) (bet, draw int64) {
-	return int64(group) * l.baseBet, int64(group) * l.baseDraw
+	if l.early {
+		if street > fixedLastStreet {
+			return slot
+		}
+		return l.baseDraw + int64(group-1)*l.earlyDraw + slot
+	}
+	return slot + int64(group)*l.baseDraw
 }

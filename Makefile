@@ -106,6 +106,51 @@ spar: engine bot
 	  --timeout-ms 1000 \
 	  --output json
 
+# Azurite: the equity-bucketed self-play blueprint, selected by local
+# exploitability (cfrgen exploit) rather than hosted matches. The blueprint
+# is too large to commit; it stays in bin/ and is overlaid at build time,
+# so the build flags here must match the ones it was trained with.
+AZURITE_BUCKETS ?= 160,160,160
+AZURITE_FIXED ?= none
+AZURITE_BLUEPRINT ?= bin/azurite.bin.gz
+AZURITE_BOT_NAME ?= 2-7-azurite-1
+AZURITE_CFR_LDFLAGS = -X github.com/nuttakit/2-7-bot/internal/cfr.handProfile=equity \
+	-X github.com/nuttakit/2-7-bot/internal/cfr.equityProfile=$(AZURITE_BUCKETS) \
+	-X github.com/nuttakit/2-7-bot/internal/cfr.fixedProfile=$(AZURITE_FIXED)
+AZURITE_PURIFY ?= 0.05
+AZURITE_GREEDY ?= false
+AZURITE_LDFLAGS = $(ONYX_LDFLAGS) -X main.playerProfile=azurite $(AZURITE_CFR_LDFLAGS) \
+	-X github.com/nuttakit/2-7-bot/internal/lapis.Purify=$(AZURITE_PURIFY) \
+	-X github.com/nuttakit/2-7-bot/internal/lapis.Greedy=$(AZURITE_GREEDY)
+AZURITE_OVERLAY = python3 -c 'import json,pathlib,sys; r=pathlib.Path.cwd(); pathlib.Path(sys.argv[1]).write_text(json.dumps({"Replace":{str(r/"internal/lapis/blueprint.bin.gz"):str(pathlib.Path(sys.argv[2]).resolve())}}))'
+
+.PHONY: cfrgen-azurite bot-azurite bot-azurite-release exploit-azurite
+
+# The trainer and evaluator for the azurite abstraction, into bin/cfrgen-azurite.
+cfrgen-azurite:
+	go build -ldflags='$(AZURITE_CFR_LDFLAGS)' -o bin/cfrgen-azurite ./cmd/cfrgen
+
+# Exploitability of the azurite blueprint over the abstract game.
+exploit-azurite: cfrgen-azurite
+	./bin/cfrgen-azurite exploit -bp $(AZURITE_BLUEPRINT) -purify 0.05 -fallback h3
+
+bot-azurite:
+	@test -f "$(AZURITE_BLUEPRINT)"
+	@mkdir -p bin
+	@overlay=$$(mktemp "$$(pwd)/bin/azurite-overlay.XXXXXX"); \
+	  trap 'rm -f "$$overlay"' EXIT; \
+	  $(AZURITE_OVERLAY) "$$overlay" "$(AZURITE_BLUEPRINT)" && \
+	  go build -overlay "$$overlay" -ldflags='$(AZURITE_LDFLAGS)' -o bin/bot-azurite ./cmd/bot
+
+bot-azurite-release:
+	@test -f "$(AZURITE_BLUEPRINT)"
+	@mkdir -p bin
+	@overlay=$$(mktemp "$$(pwd)/bin/azurite-overlay.XXXXXX"); \
+	  trap 'rm -f "$$overlay"' EXIT; \
+	  $(AZURITE_OVERLAY) "$$overlay" "$(AZURITE_BLUEPRINT)" && \
+	  CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -overlay "$$overlay" \
+	    -ldflags='-s -w $(AZURITE_LDFLAGS)' -o bin/$(AZURITE_BOT_NAME) ./cmd/bot
+
 # Reproduce the targeted blueprint; generated strategy data stays local.
 .PHONY: blueprint
 blueprint:

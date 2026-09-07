@@ -11,6 +11,7 @@ import (
 	_ "embed"
 	"fmt"
 	"math/rand/v2"
+	"strconv"
 
 	"github.com/nuttakit/2-7-bot/internal/cards"
 	"github.com/nuttakit/2-7-bot/internal/cfr"
@@ -23,8 +24,15 @@ import (
 var blueprintData []byte
 
 // Purify is the probability floor below which a blueprint action is
-// dropped before sampling (cfr.Player).
-const Purify = 0.05
+// dropped before sampling (cfr.Player), and Greedy makes the bot take the
+// most likely trained action instead of sampling at all. Both are build
+// flags because the right answer depends on how far the blueprint has
+// converged: an unconverged average carries residual weight on actions it
+// has all but abandoned, and playing those costs real chips.
+var (
+	Purify = "0.05"
+	Greedy = "false"
+)
 
 // lost marks a hand the tracker could not follow; the heuristic plays it.
 const lost = -1
@@ -42,7 +50,10 @@ type Bot struct {
 	// fixed identifies the arena's constant big-blind card from our own
 	// big-blind hands; the button then plays that card's strategy group.
 	fixed cfr.FixedCard
-	// Fallbacks counts decisions the heuristic took, for diagnostics.
+	// Fallback answers the decisions the blueprint cannot: a lost hand,
+	// or an untrained set. Nil means the heuristic policy.
+	Fallback func(wire.Decision) wire.Action
+	// Fallbacks counts decisions the fallback took, for diagnostics.
 	Fallbacks int
 }
 
@@ -70,8 +81,17 @@ func NewModel(m cfr.Model) *Bot {
 }
 
 // New decodes the embedded blueprint. It fails only on a build whose
-// blueprint does not match its tree, which is a bug worth refusing to run.
+// blueprint does not match its tree, or whose selection flags do not
+// parse — both bugs worth refusing to run.
 func New() (*Bot, error) {
+	purify, err := strconv.ParseFloat(Purify, 64)
+	if err != nil || purify < 0 || purify > 1 {
+		return nil, fmt.Errorf("lapis: bad purify %q", Purify)
+	}
+	greedy, err := strconv.ParseBool(Greedy)
+	if err != nil {
+		return nil, fmt.Errorf("lapis: bad greedy %q", Greedy)
+	}
 	tree := cfr.BuildTree()
 	abs := cfr.BuildAbstraction()
 	layout := cfr.NewLayout(tree, abs)
@@ -82,7 +102,7 @@ func New() (*Bot, error) {
 	return &Bot{
 		Table:  table.New(),
 		tree:   tree,
-		player: &cfr.Player{Tree: tree, Abs: abs, Layout: layout, BP: bp, Purify: Purify},
+		player: &cfr.Player{Tree: tree, Abs: abs, Layout: layout, BP: bp, Purify: purify, Greedy: greedy},
 		rng:    rand.New(rand.NewPCG(rand.Uint64(), rand.Uint64())),
 		node:   lost,
 	}, nil
@@ -186,6 +206,9 @@ func (b *Bot) Decide(decision wire.Decision) wire.Action {
 	action, ok := b.propose(decision)
 	if !ok {
 		b.Fallbacks++
+		if b.Fallback != nil {
+			return b.Fallback(decision)
+		}
 		return policy.Decide(b.Table, decision)
 	}
 	return wire.Legalize(decision, action, b.Table.Hand.Cards)

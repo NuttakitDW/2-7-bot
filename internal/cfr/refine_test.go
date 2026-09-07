@@ -18,7 +18,7 @@ func TestRichFinalAbstractionRefinesLegacy(t *testing.T) {
 			continue
 		}
 		old := base.Classes[id]
-		if int(info.Final) >= rich.FinalBuckets || rich.finalParents[info.Final] != old.Final {
+		if int(info.Final) >= rich.FinalBuckets || uint16(rich.finalParents[info.Final]) != old.Final {
 			t.Fatalf("class %d has invalid refinement", id)
 		}
 		info.Final = old.Final

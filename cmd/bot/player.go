@@ -21,18 +21,32 @@ type runtimeBot struct {
 }
 
 // Profiles. "onyx" is the heuristic bot; "model-bets" mixes fitted opponent
-// mirroring into it; "learned" plays the embedded blueprint at every
-// decision; "learned-bayes" plays the blueprint up to the last draw and
-// solves the river against the fitted opponent model exactly.
+// mirroring into it; "learned" plays the embedded blueprint's modal action
+// at every decision; "learned-bayes" plays the blueprint up to the last
+// draw and solves the river against the fitted opponent model exactly;
+// "azurite" samples the blueprint's mixture as trained and hands every
+// set it never visited to the onyx lines, snows and all.
 func newRuntimeBot() (*runtimeBot, error) {
 	switch playerProfile {
-	case "onyx", "model-bets", "learned", "learned-bayes":
+	case "onyx", "model-bets", "learned", "learned-bayes", "azurite":
 	default:
 		return nil, fmt.Errorf("unknown player profile %q", playerProfile)
 	}
 	if playerProfile == "onyx" {
 		base, err := onyx.New()
 		return &runtimeBot{Bot: base}, err
+	}
+	if playerProfile == "azurite" {
+		base, err := onyx.New()
+		if err != nil {
+			return nil, err
+		}
+		learned, err := lapis.New()
+		if err != nil {
+			return nil, err
+		}
+		learned.Fallback = base.Decide
+		return &runtimeBot{Bot: base, learned: learned, blueprintOnly: true}, nil
 	}
 	if playerProfile == "learned" || playerProfile == "learned-bayes" {
 		learned, err := lapis.NewGreedy()

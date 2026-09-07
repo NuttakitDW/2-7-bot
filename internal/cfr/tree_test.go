@@ -109,7 +109,7 @@ func TestAbstractionBuckets(t *testing.T) {
 	for _, test := range tests {
 		hand := cards.SortedByRank(cards.MustParse(splitWords(test.hand)...))
 		info := abs.Classes[Class(hand)]
-		if info.Draw != uint16(test.draw) || info.Final != test.final {
+		if info.Draw != uint16(test.draw) || info.Final != uint16(test.final) {
 			t.Errorf("%s: draw/final = %d/%d, want %d/%d", test.hand, info.Draw, info.Final, test.draw, test.final)
 		}
 		if info.NumCand != test.cands {

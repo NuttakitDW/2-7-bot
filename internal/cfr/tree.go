@@ -74,6 +74,9 @@ type Node struct {
 	// Offset is the node's first slot in the betting strategy tables, or
 	// -1 for a node that stores no strategy.
 	Offset int64
+	// FixedOffset is the node's first slot within one big-blind-card
+	// group's slice under the "early" fixed-card layout.
+	FixedOffset int64
 }
 
 // Tree is the enumerated public game.
@@ -85,11 +88,18 @@ type Tree struct {
 	Root      int32
 	betNodes  int
 	drawNodes int
+	// last is the street whose betting round ends in a showdown.
+	last int
 }
 
 // BuildTree enumerates the game.
-func BuildTree() *Tree {
-	t := &Tree{}
+func BuildTree() *Tree { return BuildTreeTo(Draw3) }
+
+// BuildTreeTo enumerates a game cut short: the betting round on street
+// last ends in a showdown. Draw3 is the real game; a shorter one is a
+// cheap stand-in for tests of the machinery around the tree.
+func BuildTreeTo(last int) *Tree {
+	t := &Tree{last: last}
 	t.Root = t.build(Predraw, [2]int32{SmallBlind, BigBlind}, BigBlind, 1, Btn, [2]bool{false, false})
 	return t
 }
@@ -146,7 +156,7 @@ func (t *Tree) build(street int, commit [2]int32, level int32, wagers int32, act
 // roundEnd is what follows a completed betting round: showdown after the
 // last street, otherwise the next street's draw phase, big blind first.
 func (t *Tree) roundEnd(street int, commit [2]int32) int32 {
-	if street == Draw3 {
+	if street == t.last {
 		return t.terminal(KindShowdown, street, 0, commit)
 	}
 	next := street + 1

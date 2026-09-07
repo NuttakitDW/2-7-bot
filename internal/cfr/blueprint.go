@@ -22,19 +22,20 @@ func (tr *Trainer) Extract(minVisits uint32) *Blueprint {
 	tr.mu.Lock()
 	defer tr.mu.Unlock()
 	bp := &Blueprint{Bet: make([]uint8, tr.Layout.BetSlots), Draw: make([]uint8, tr.Layout.DrawSlots)}
-	for group := 0; group < tr.Layout.FixedGroups; group++ {
-		base, _ := tr.Layout.GroupBase(group)
+	for group := 0; group < max(tr.Layout.FixedGroups, 1); group++ {
 		for i := range tr.Tree.Nodes {
 			node := &tr.Tree.Nodes[i]
-			if node.Kind != KindBet || (group > 0 && node.Actor != Btn) {
+			if node.Kind != KindBet || (group > 0 && !tr.Layout.Sliced(node, group)) {
 				continue
 			}
 			n := int64(len(node.Acts))
-			sets := int64(BetContexts(int(node.Street))) * int64(tr.Layout.Buckets(int(node.Street)))
-			for set := int64(0); set < sets; set++ {
-				slot := base + node.Offset + set*n
-				if tr.BetVisits[slot] >= minVisits {
-					quantise(tr.BetStrat[slot:slot+n], bp.Bet[slot:slot+n])
+			street := int(node.Street)
+			for ctx := 0; ctx < BetContexts(street); ctx++ {
+				for bucket := 0; bucket < tr.Layout.Buckets(street); bucket++ {
+					slot := tr.Layout.BetSlotFixed(node, ctx, bucket, group)
+					if tr.BetVisits[slot] >= minVisits {
+						quantise(tr.BetStrat[slot:slot+n], bp.Bet[slot:slot+n])
+					}
 				}
 			}
 		}

@@ -4,6 +4,7 @@
 //	cfrgen train -model cobalt -weight 0.5 ...   restricted response to a model
 //	cfrgen eval  -bp FILE -vs cobalt|h3|FILE -hands N
 //	cfrgen stats -bp FILE
+//	cfrgen exploit -bp FILE            best response over the abstract game
 //
 // The blueprint is committed output: it is built here, not at build time.
 package main
@@ -25,7 +26,7 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: cfrgen train|eval|stats [flags]")
+		fmt.Fprintln(os.Stderr, "usage: cfrgen train|eval|stats|probe|refine|exploit [flags]")
 		os.Exit(2)
 	}
 	var err error
@@ -40,6 +41,8 @@ func main() {
 		err = probe(os.Args[2:])
 	case "refine":
 		err = refine(os.Args[2:])
+	case "exploit":
+		err = exploit(os.Args[2:])
 	default:
 		err = fmt.Errorf("unknown command %q", os.Args[1])
 	}
