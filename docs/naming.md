@@ -71,6 +71,31 @@ nutt-badugi-fl-hu-x1           an experiment on another game
 builds are no longer comparable except by playing them; change a qualifier when the
 same design was built with different knobs. Either way it is a new name.
 
+## The codename grammar
+
+Since 2026-09-05 a second, shorter grammar exists for the one game we
+actually contest:
+
+```
+2-7-<codename>-<gen>
+```
+
+| segment | values | meaning |
+|---|---|---|
+| `2-7` | fixed | `27td-fl`, heads-up — the parser fills in `hu` and `27td-fl` |
+| codename | one lowercase word | a strategy family, chosen fresh when the design changes |
+| gen | `1`, `2`, … | raceable builds within the family |
+
+```
+2-7-cobalt-1     h3's chart and draws with added aggression
+2-7-lapis-1      MCCFR blueprint, first build
+```
+
+Two rules. A codename names a *design*: retuning within it bumps `gen`, a
+new architecture takes a new word. And a bot is never named after the agent
+or branch that built it — `fable` is reserved by the parser, and the branch
+`fable/2-7-fable` produced `2-7-lapis-1`, not `2-7-fable-1`.
+
 ## New name, or new version?
 
 **A new raceable build always gets a new name.**

@@ -90,6 +90,9 @@ func ParseBotName(name string) (BotName, error) {
 	}
 
 	segments := strings.Split(name, "-")
+	if strings.HasPrefix(name, CodenamePrefix) {
+		return parseCodename(name, segments)
+	}
 	if segments[0] != BotNameOwner {
 		return BotName{}, fmt.Errorf("bot name %q must start with %q", name, BotNameOwner+"-")
 	}
@@ -149,8 +152,51 @@ func (n BotName) NextGen() BotName {
 
 // String rebuilds the name, so a parse round-trips.
 func (n BotName) String() string {
+	if n.Owner != BotNameOwner {
+		return fmt.Sprintf("%s%s-%d", CodenamePrefix, n.Owner, n.Generation)
+	}
 	segments := []string{n.Owner, n.Game, n.Seats, fmt.Sprintf("%c%d", n.Lineage, n.Generation)}
 	return strings.Join(append(segments, n.Qualifiers...), "-")
+}
+
+// The codename grammar: 2-7-<codename>-<gen>, heads-up 27td-fl only.
+//
+// A codename is one lowercase word naming a strategy family; the generation
+// counts raceable builds within it. Owner carries the codename, since the
+// roster shows no account prefix for these names. Reserved codenames are the
+// agents that build bots — a bot is never named after its author.
+const (
+	CodenamePrefix = "2-7-"
+	CodenameGame   = "27td-fl"
+	CodenameSeats  = "hu"
+)
+
+var reservedCodenames = map[string]bool{"fable": true}
+
+func parseCodename(name string, segments []string) (BotName, error) {
+	if len(segments) != 4 {
+		return BotName{}, fmt.Errorf("bot name %q must be %s<codename>-<generation>", name, CodenamePrefix)
+	}
+	codename := segments[2]
+	for i := 0; i < len(codename); i++ {
+		if codename[i] < 'a' || codename[i] > 'z' {
+			return BotName{}, fmt.Errorf("codename %q must be lowercase letters only", codename)
+		}
+	}
+	if reservedCodenames[codename] {
+		return BotName{}, fmt.Errorf("codename %q is reserved", codename)
+	}
+	_, generation, err := parseLineage("h" + segments[3])
+	if err != nil {
+		return BotName{}, fmt.Errorf("bot name %q: %w", name, err)
+	}
+	return BotName{
+		Owner:      codename,
+		Game:       CodenameGame,
+		Seats:      CodenameSeats,
+		Lineage:    LineageBlueprint,
+		Generation: generation,
+	}, nil
 }
 
 func checkBotNameCharset(name string) error {
