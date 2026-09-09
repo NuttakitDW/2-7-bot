@@ -35,12 +35,39 @@ type Trainer struct {
 
 	// Vanilla retains signed cumulative regrets; false keeps the legacy
 	// regret-matching+ update. Configure before starting workers.
-	Vanilla     bool
-	Model       Model
-	ModelWeight float64
+	Vanilla bool
+	// UniformAverage gives each sampled average update weight one. Periodic
+	// discounting supplies recency weighting separately; combining it with
+	// the default linear average would count recency twice.
+	UniformAverage bool
+	Model          Model
+	ModelWeight    float64
 	// ModelByHand samples a fixed opponent type once per traverser walk.
 	// False retains the original decision-wise mixture. Set before Run.
 	ModelByHand bool
+	// AverageEvery samples the extra response-training average passes with
+	// probability 1/N and multiplies their strategy-sum updates by N.
+	// Zero and one retain every pass without consuming an extra random draw.
+	// This preserves expected sum increments, but increases their variance;
+	// visit counts remain actual sampled updates. Ignored in pure self-play.
+	// Configure before Run; legacy state files do not store this setting.
+	AverageEvery int
+	// SampleModelDraws samples one traverser draw with an exploratory proposal
+	// in fixed-model hand walks. Importance weights preserve raw regret
+	// increments in expectation for frozen policies, but increase variance;
+	// RM+ clipping and adaptive updates need not follow the same trajectory.
+	// Average passes and self-play retain enumeration. Configure before Run.
+	SampleModelDraws bool
+	// UniformModelDraws uses a uniform proposal when SampleModelDraws is on.
+	// With at most six candidates and three draws, inverse prefix weights
+	// are bounded by 216 instead of 27000 for the policy-guided proposal.
+	// This trades variance in returned utilities against regret-update variance.
+	UniformModelDraws bool
+	// UseDrawBaseline learns auxiliary draw values to reduce sampling variance.
+	// Only sampled fixed-model walks use them. Configure before Run. Legacy
+	// checkpoints omit this cache; LoadState resets it to a cold start.
+	UseDrawBaseline bool
+	drawBaseline    []float64
 	// FixedBB, when HasFixedBB, is dealt to the big blind every hand
 	// (State.DealFixed); FixedRandom deals a fresh random card instead.
 	// With a fixed-card layout the button trains its group's slice, and
@@ -50,6 +77,12 @@ type Trainer struct {
 	HasFixedBB  bool
 	FixedRandom bool
 	FixedHidden float64
+	// FixedOnly freezes base information sets, learning only appended known-card
+	// groups. Initialize from a prior blueprint before Run.
+	FixedOnly bool
+	// FrozenRollouts samples the fully frozen suffix of an early fixed-card
+	// layout instead of enumerating the traverser there. Set before Run.
+	FrozenRollouts bool
 
 	BetRegret  []float64
 	BetStrat   []float64
@@ -84,6 +117,11 @@ func (tr *Trainer) Iterations() int64 { return tr.iterations.Load() }
 
 // Run trains for n iterations across w workers.
 func (tr *Trainer) Run(n int64, workers int, seed uint64) {
+	tr.mu.Lock()
+	if tr.UseDrawBaseline && len(tr.drawBaseline) != len(tr.DrawRegret) {
+		tr.drawBaseline = make([]float64, len(tr.DrawRegret))
+	}
+	tr.mu.Unlock()
 	model := tr.Model
 	if m, ok := tr.Model.(memoizer); ok {
 		model = m.WithMemo()
@@ -128,6 +166,9 @@ type worker struct {
 	view          View
 	averageOnly   bool
 	fixedOpponent bool
+	// Inverse probability of earlier sampled traverser draws. Zero denotes
+	// the unsampled prefix (weight one), including directly constructed workers.
+	drawSampleWeight float64
 }
 
 // memoizer is a Model that can serve the walkers through a prediction cache.
@@ -136,18 +177,29 @@ type memoizer interface {
 }
 
 func (w *worker) iterate(t float64) {
+	if w.tr.UniformAverage {
+		t = 1
+	}
 	w.deal()
 	for traverser := 0; traverser < 2; traverser++ {
 		w.state.Reset()
+		w.drawSampleWeight = 0
 		w.selectOpponent()
 		w.walk(w.tr.Tree.Root, traverser, t)
 	}
 	if w.tr.Model != nil && w.tr.ModelWeight > 0 {
 		// Average the learned policy under its own sampling distribution.
 		// Model-sampled own actions cannot estimate its realization weights.
+		if every := w.tr.AverageEvery; every > 1 {
+			if w.rng.IntN(every) != 0 {
+				return
+			}
+			t *= float64(every)
+		}
 		w.averageOnly = true
 		for traverser := 0; traverser < 2; traverser++ {
 			w.state.Reset()
+			w.drawSampleWeight = 0
 			w.walk(w.tr.Tree.Root, traverser, t)
 		}
 		w.averageOnly = false
@@ -190,6 +242,12 @@ func (w *worker) walk(id int32, traverser int, t float64) float64 {
 	}
 }
 
+// frozenRollout is safe only after the last potentially trainable street.
+// There are no downstream regrets or averages to update in this suffix.
+func (w *worker) frozenRollout(node *Node) bool {
+	return w.tr.FrozenRollouts && w.tr.FixedOnly && w.tr.Layout.early && node.Street > fixedLastStreet
+}
+
 func (w *worker) walkBet(id int32, node *Node, traverser int, t float64) float64 {
 	p := int(node.Actor)
 	class := Class(w.state.Hands[p][:])
@@ -199,9 +257,9 @@ func (w *worker) walkBet(id int32, node *Node, traverser int, t float64) float64
 	regret := w.tr.BetRegret[slot : slot+int64(n)]
 	lock := w.tr.setLock(false, slot)
 
-	if p != traverser {
+	if p != traverser || w.frozenRollout(node) {
 		var a int
-		if w.useModel() {
+		if p != traverser && w.useModel() {
 			w.view = w.state.View(w.tr.Tree, id, p, w.rng)
 			action, ok := w.model.Bet(&w.view)
 			a = actionIndex(node, action, ok)
@@ -210,7 +268,7 @@ func (w *worker) walkBet(id int32, node *Node, traverser int, t float64) float64
 			lock.Lock()
 			matchRegrets(regret, sigma[:n])
 			strat := w.tr.BetStrat[slot : slot+int64(n)]
-			if w.recordAverage() {
+			if w.recordAverage() && (!w.tr.FixedOnly || slot >= w.tr.Layout.baseBet) {
 				for i := range strat {
 					strat[i] += t * sigma[i]
 				}
@@ -233,9 +291,9 @@ func (w *worker) walkBet(id int32, node *Node, traverser int, t float64) float64
 		util += sigma[a] * values[a]
 		w.state = saved
 	}
-	if !w.averageOnly {
+	if !w.averageOnly && (!w.tr.FixedOnly || slot >= w.tr.Layout.baseBet) {
 		lock.Lock()
-		updateRegrets(regret, values[:n], util, w.tr.Vanilla)
+		w.updateSampledRegrets(regret, values[:n], util)
 		lock.Unlock()
 	}
 	return util
@@ -259,8 +317,8 @@ func (w *worker) walkDraw(id int32, node *Node, traverser int, t float64) float6
 	regret := w.tr.DrawRegret[slot : slot+int64(n)]
 	lock := w.tr.setLock(true, slot)
 
-	if p != traverser {
-		if w.useModel() {
+	if p != traverser || w.frozenRollout(node) {
+		if p != traverser && w.useModel() {
 			w.view = w.state.View(w.tr.Tree, id, p, w.rng)
 			keep, ok := w.model.Draw(&w.view)
 			if !ok {
@@ -273,7 +331,7 @@ func (w *worker) walkDraw(id int32, node *Node, traverser int, t float64) float6
 		lock.Lock()
 		matchRegrets(regret, sigma[:n])
 		strat := w.tr.DrawStrat[slot : slot+int64(n)]
-		if w.recordAverage() {
+		if w.recordAverage() && (!w.tr.FixedOnly || slot >= w.tr.Layout.baseDraw) {
 			for i := range strat {
 				strat[i] += t * sigma[i]
 			}
@@ -285,23 +343,81 @@ func (w *worker) walkDraw(id int32, node *Node, traverser int, t float64) float6
 	}
 
 	var sigma, values [MaxCand]float64
+	useBaseline := w.sampleModelDraws() && w.tr.UseDrawBaseline
 	lock.Lock()
 	matchRegrets(regret, sigma[:n])
+	if useBaseline {
+		copy(values[:n], w.tr.drawBaseline[slot:slot+int64(n)])
+	}
 	lock.Unlock()
 	saved := w.state
 	util := 0.0
-	for c := 0; c < n; c++ {
+	if w.sampleModelDraws() {
+		var proposal [MaxCand]float64
+		for c := 0; c < n; c++ {
+			proposal[c] = .8*sigma[c] + .2/float64(n)
+			if w.tr.UniformModelDraws {
+				proposal[c] = 1 / float64(n)
+			}
+		}
+		c := sample(proposal[:n], w.rng)
+		prefix := w.drawSampleWeight
+		weight := prefix
+		if weight == 0 {
+			weight = 1
+		}
+		w.drawSampleWeight = weight / proposal[c]
 		w.state.Apply(p, street, info.Keep[c])
-		values[c] = w.walk(node.Next[0], traverser, t)
-		util += sigma[c] * values[c]
+		child := w.walk(node.Next[0], traverser, t)
+		values[c] += (child - values[c]) / proposal[c]
+		for i := 0; i < n; i++ {
+			util += sigma[i] * values[i]
+		}
+		if useBaseline {
+			// Estimate from the pre-sampling snapshot, then learn the child
+			// return without this node's 1/q. Use the current shared cache
+			// under lock so concurrent updates are not overwritten.
+			lock.Lock()
+			b := &w.tr.drawBaseline[slot+int64(c)]
+			*b += .1 * (child - *b)
+			lock.Unlock()
+		}
+		w.drawSampleWeight = prefix
 		w.state = saved
+	} else {
+		for c := 0; c < n; c++ {
+			w.state.Apply(p, street, info.Keep[c])
+			values[c] = w.walk(node.Next[0], traverser, t)
+			util += sigma[c] * values[c]
+			w.state = saved
+		}
 	}
-	if !w.averageOnly {
+	if !w.averageOnly && (!w.tr.FixedOnly || slot >= w.tr.Layout.baseDraw) {
 		lock.Lock()
-		updateRegrets(regret, values[:n], util, w.tr.Vanilla)
+		w.updateSampledRegrets(regret, values[:n], util)
 		lock.Unlock()
 	}
 	return util
+}
+
+func (w *worker) sampleModelDraws() bool {
+	return w.tr.SampleModelDraws && w.tr.ModelByHand && w.fixedOpponent && !w.averageOnly
+}
+
+// Current draw action estimates already include their own 1/q. Only the
+// earlier sampled prefix corrects this node's increments; never apply that
+// prefix to its returned utility, which ancestors correct separately.
+func (w *worker) updateSampledRegrets(regret, values []float64, utility float64) {
+	if w.drawSampleWeight == 0 || w.drawSampleWeight == 1 {
+		updateRegrets(regret, values, utility, w.tr.Vanilla)
+		return
+	}
+	for i := range regret {
+		regret[i] += (values[i] - utility) * w.drawSampleWeight
+		if !w.tr.Vanilla {
+			regret[i] = max(regret[i], 0)
+		}
+	}
 }
 
 func (tr *Trainer) setLock(draw bool, slot int64) *sync.Mutex {

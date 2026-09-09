@@ -80,6 +80,17 @@ func NewModel(m cfr.Model) *Bot {
 	}
 }
 
+// NewEmpirical plays the modal action of an embedded fitted policy. This
+// profile requires the build overlay to replace blueprintData's payload
+// with empirical JSON instead of a compressed MCCFR blueprint.
+func NewEmpirical() (*Bot, error) {
+	m, err := cfr.DecodeEmpirical(blueprintData)
+	if err != nil {
+		return nil, fmt.Errorf("lapis empirical: %w", err)
+	}
+	return NewModel(m.Mode()), nil
+}
+
 // New decodes the embedded blueprint. It fails only on a build whose
 // blueprint does not match its tree, or whose selection flags do not
 // parse — both bugs worth refusing to run.

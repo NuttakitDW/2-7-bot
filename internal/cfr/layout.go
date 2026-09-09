@@ -37,6 +37,20 @@ type Layout struct {
 	draw2Buckets int
 }
 
+// WithoutFixed returns the same abstraction and node offsets with a single
+// strategy group. It can read the baseline opponent or prior while a learner
+// trains separate groups for the observed big-blind card.
+func (l *Layout) WithoutFixed() *Layout {
+	base := *l
+	if l.FixedGroups > 1 {
+		base.BetSlots, base.DrawSlots = l.baseBet, l.baseDraw
+	}
+	base.FixedGroups = 1
+	base.early = false
+	base.earlyBet, base.earlyDraw = 0, 0
+	return &base
+}
+
 // Context sizes: draw counts clip at three, four values per reading.
 const (
 	drawClip    = 3

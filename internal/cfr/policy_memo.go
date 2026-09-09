@@ -1,29 +1,25 @@
 package cfr
 
 import (
-	"sync/atomic"
+	"fmt"
+	"sync"
 
 	"github.com/nuttakit/2-7-bot/internal/handclass"
 )
 
-// policyMemo is a direct-mapped prediction cache shared by every walker.
-// Every feature the model reads is a function of the public node, the draw
-// record, the last aggressor and the hand class, so a prediction keyed on
-// those is exact; only the sampling draw (View.Rand) varies between calls,
-// and it is applied after lookup. A collision simply evicts: this is a
-// cache, and a miss costs one forest walk.
-//
-// Entries are written value first and key last, with the key cleared
-// before the value changes; a reader that sees the same key before and
-// after copying the value has a consistent entry. Two walkers computing the
-// same miss store identical values, so a race between them is harmless.
+// policyMemo caches predictions keyed on the public node, draw record,
+// aggressor and hand class. Random action sampling happens after lookup.
+// Stored float32 probabilities introduce small rounding on cache hits.
+// Sharded locks protect each entry's key and values as one coherent update;
+// forest computation stays outside the locks.
 type policyMemo struct {
 	entries []memoEntry
 	bits    uint
+	locks   [256]sync.Mutex
 }
 
 type memoEntry struct {
-	key  atomic.Uint64
+	key  uint64
 	vals [6]float32
 }
 
@@ -36,9 +32,25 @@ func newPolicyMemo(bits uint) *policyMemo {
 // WithMemo returns a model sharing this one's forests and a prediction
 // cache. Every walker may share the returned model.
 func (m *Empirical) WithMemo() Model {
+	return m.withMemoBits(memoBits)
+}
+
+// WithMemoBits returns a cached model with 2^bits entries (32 bytes each).
+// A small cache supports runtime belief filtering without the trainer's
+// much larger default allocation. The returned cache is concurrency safe.
+func (m *Empirical) WithMemoBits(bits uint) (*Empirical, error) {
+	if bits < 1 || bits > 25 {
+		return nil, fmt.Errorf("memo bits must be between 1 and 25")
+	}
+	return m.withMemoBits(bits), nil
+}
+
+func (m *Empirical) withMemoBits(bits uint) *Empirical {
 	c := &Empirical{Version: m.Version, Betting: m.Betting, Drawing: m.Drawing,
-		BettingForest: m.BettingForest, DrawingForest: m.DrawingForest, compiled: m.compile()}
-	c.memo = newPolicyMemo(memoBits)
+		BettingForest: m.BettingForest, DrawingForest: m.DrawingForest,
+		BettingBoost: m.BettingBoost, DrawingBoost: m.DrawingBoost,
+		ResponseAlpha: m.ResponseAlpha, compiled: m.compile()}
+	c.memo = newPolicyMemo(bits)
 	return c
 }
 
@@ -76,22 +88,25 @@ func (pm *policyMemo) lookup(v *View, draw bool, compute func(*View) [6]float64)
 	if !ok {
 		return compute(v)
 	}
-	e := &pm.entries[(key*0x9E3779B97F4A7C15)>>(64-pm.bits)]
-	if e.key.Load() == key {
-		vals := e.vals
-		if e.key.Load() == key {
-			var out [6]float64
-			for k, x := range vals {
-				out[k] = float64(x)
-			}
-			return out
+	index := (key * 0x9E3779B97F4A7C15) >> (64 - pm.bits)
+	e := &pm.entries[index]
+	lock := &pm.locks[index%uint64(len(pm.locks))]
+	lock.Lock()
+	if e.key == key {
+		var out [6]float64
+		for k, x := range e.vals {
+			out[k] = float64(x)
 		}
+		lock.Unlock()
+		return out
 	}
+	lock.Unlock()
 	p := compute(v)
-	e.key.Store(0)
+	lock.Lock()
 	for k, x := range p {
 		e.vals[k] = float32(x)
 	}
-	e.key.Store(key)
+	e.key = key
+	lock.Unlock()
 	return p
 }

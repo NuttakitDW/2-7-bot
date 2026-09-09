@@ -74,6 +74,7 @@ func (tr *Trainer) LoadState(path string) error {
 	if bets != uint64(tr.Layout.BetSlots) || draws != uint64(tr.Layout.DrawSlots) {
 		return fmt.Errorf("state: %d/%d slots, layout wants %d/%d", bets, draws, tr.Layout.BetSlots, tr.Layout.DrawSlots)
 	}
+	clear(tr.drawBaseline) // Auxiliary values are not part of the legacy state.
 	tr.iterations.Store(int64(binary.LittleEndian.Uint64(header[20:])))
 	for _, table := range [][]float64{tr.BetRegret, tr.BetStrat, tr.DrawRegret, tr.DrawStrat} {
 		if err := readFloats(r, table); err != nil {

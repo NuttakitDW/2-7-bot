@@ -16,6 +16,9 @@ var opponentPolicyData []byte
 
 var beliefParticleCount = "512"
 
+// Zero retains uncached behavior; 18 uses an approximately 8 MiB cache.
+var beliefMemoBits = "0"
+
 // riverResponseAlpha sharpens the fitted opponent's predicted river
 // responses toward its most likely action (cfr.Empirical.ResponseAlpha).
 var riverResponseAlpha = "1"
@@ -44,6 +47,10 @@ func newRiverSolver() (*riverSolver, error) {
 	if err != nil || n < 64 || n > 8192 {
 		return nil, fmt.Errorf("onyx: invalid belief particle count %q", beliefParticleCount)
 	}
+	cacheBits, err := strconv.Atoi(beliefMemoBits)
+	if err != nil || cacheBits < 0 || cacheBits > 25 {
+		return nil, fmt.Errorf("onyx: invalid belief memo bits %q", beliefMemoBits)
+	}
 	m, err := decodeOpponentModel(opponentPolicyData)
 	if err != nil {
 		return nil, fmt.Errorf("onyx: opponent model: %w", err)
@@ -53,6 +60,12 @@ func newRiverSolver() (*riverSolver, error) {
 		return nil, fmt.Errorf("onyx: invalid river response sharpening %q", riverResponseAlpha)
 	}
 	m.ResponseAlpha = alpha
+	if cacheBits > 0 {
+		m, err = m.WithMemoBits(uint(cacheBits))
+		if err != nil {
+			return nil, err
+		}
+	}
 	var ranges *riverRangeModel
 	if modelSelection == "range-call" {
 		ranges, err = decodeRiverRange(opponentPolicyData)

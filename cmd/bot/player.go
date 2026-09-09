@@ -25,10 +25,11 @@ type runtimeBot struct {
 // at every decision; "learned-bayes" plays the blueprint up to the last
 // draw and solves the river against the fitted opponent model exactly;
 // "azurite" samples the blueprint's mixture as trained and hands every
-// set it never visited to the onyx lines, snows and all.
+// set it never visited to the onyx lines, snows and all. "empirical" plays
+// an embedded fitted policy through the same legal-action tracker.
 func newRuntimeBot() (*runtimeBot, error) {
 	switch playerProfile {
-	case "onyx", "model-bets", "learned", "learned-bayes", "azurite":
+	case "onyx", "model-bets", "learned", "learned-bayes", "azurite", "empirical":
 	default:
 		return nil, fmt.Errorf("unknown player profile %q", playerProfile)
 	}
@@ -36,12 +37,17 @@ func newRuntimeBot() (*runtimeBot, error) {
 		base, err := onyx.New()
 		return &runtimeBot{Bot: base}, err
 	}
-	if playerProfile == "azurite" {
+	if playerProfile == "azurite" || playerProfile == "empirical" {
 		base, err := onyx.New()
 		if err != nil {
 			return nil, err
 		}
-		learned, err := lapis.New()
+		var learned *lapis.Bot
+		if playerProfile == "empirical" {
+			learned, err = lapis.NewEmpirical()
+		} else {
+			learned, err = lapis.New()
+		}
 		if err != nil {
 			return nil, err
 		}

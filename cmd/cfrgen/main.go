@@ -26,7 +26,7 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: cfrgen train|eval|stats|probe|refine|exploit [flags]")
+		fmt.Fprintln(os.Stderr, "usage: cfrgen train|eval|stats|probe|refine|exploit|select [flags]")
 		os.Exit(2)
 	}
 	var err error
@@ -43,6 +43,8 @@ func main() {
 		err = refine(os.Args[2:])
 	case "exploit":
 		err = exploit(os.Args[2:])
+	case "select":
+		err = selectBlueprint(os.Args[2:])
 	default:
 		err = fmt.Errorf("unknown command %q", os.Args[1])
 	}
@@ -67,15 +69,19 @@ func newWorld() *world {
 }
 
 func (w *world) load(path string, purify float64) (*cfr.Player, error) {
+	layout := w.layout
+	if name, ok := strings.CutPrefix(path, "base:"); ok {
+		path, layout = name, w.layout.WithoutFixed()
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
 	}
-	bp, err := cfr.Decode(data, w.layout)
+	bp, err := cfr.Decode(data, layout)
 	if err != nil {
 		return nil, err
 	}
-	return &cfr.Player{Tree: w.tree, Abs: w.abs, Layout: w.layout, BP: bp, Purify: purify}, nil
+	return &cfr.Player{Tree: w.tree, Abs: w.abs, Layout: layout, BP: bp, Purify: purify}, nil
 }
 
 // model resolves an opponent name: a heuristic, or a blueprint file.
@@ -134,19 +140,29 @@ func (w *world) model(name string, purify float64) (cfr.Model, error) {
 
 func train(args []string) error {
 	fs := flag.NewFlagSet("train", flag.ContinueOnError)
-	iters := fs.Int64("iters", 1_000_000, "hands to walk")
+	iters := fs.Int64("iters", 1_000_000, "total iteration target, including iterations in a resumed state")
 	workers := fs.Int("workers", 1, "concurrent walkers; use 1 for reproducibility")
 	seed := fs.Uint64("seed", 1, "PCG seed")
 	out := fs.String("out", "blueprint.bin.gz", "blueprint output path")
+	compression := fs.Int("compression", 9, "blueprint gzip level 1-9; lower levels speed up experimental checkpoints")
 	every := fs.Duration("every", 10*time.Minute, "checkpoint interval")
 	modelName := fs.String("model", "", "fixed opponent: cobalt, h3, blueprint, empirical JSON, or mode:FILE.json")
 	weight := fs.Float64("weight", 0, "fraction of opponent decisions the model plays")
 	modelScope := fs.String("model-scope", "decision", "sample the fixed model per decision or per hand")
+	averageEvery := fs.Int("average-every", 1, "with a positive model weight: sample extra average passes with probability 1/N and compensate their sum weights")
+	sampleModelDraws := fs.Bool("sample-model-draws", false, "experimental: importance-sample traverser draws in fixed-model hand walks")
+	drawBaseline := fs.Bool("draw-baseline", false, "with sample-model-draws: learn auxiliary draw values (reset on resume)")
+	uniformModelDraws := fs.Bool("uniform-model-draws", false, "with sample-model-draws: use a uniform proposal to bound importance weights")
 	minVisits := fs.Uint("minvisits", 20, "prune sets visited fewer times than this")
 	statePath := fs.String("state", "", "raw table checkpoint to write alongside the blueprint")
 	resume := fs.String("resume", "", "raw table checkpoint to start from")
+	prior := fs.String("init-blueprint", "", "initialize from a selected blueprint; base:FILE copies a single-group prior into fixed-card groups")
+	fixedOnly := fs.Bool("fixed-only", false, "with init-blueprint or a matching fixed-only resumed state: freeze base policy and learn only known-card groups")
+	frozenRollouts := fs.Bool("frozen-rollouts", false, "with fixed-only: sample the frozen suffix of an early fixed-card layout")
+	priorStrength := fs.Float64("prior-strength", 1000, "regret and average mass per initialized information set")
 	resetAvg := fs.Bool("resetavg", false, "with -resume: drop the accumulated average, keep the regrets")
-	regret := fs.String("regret", "plus", "regret update: plus or vanilla (signed)")
+	regret := fs.String("regret", "plus", "regret update: plus, vanilla (signed), or discounted (fresh runs only)")
+	discountEvery := fs.Int64("discount-every", 100_000, "with discounted regret: iterations per discount period")
 	cpuProfile := fs.String("cpuprofile", "", "write a CPU profile of the run")
 	fixed := fs.String("fixed", "", "card dealt to the big blind every hand: e.g. Qh, or random")
 	hidden := fs.Float64("hidden", 0.15, "with -fixed and a fixed-card layout: fraction of hands the button plays not knowing the card")
@@ -167,8 +183,20 @@ func train(args []string) error {
 	if *iters <= 0 || *workers <= 0 || *every <= 0 {
 		return fmt.Errorf("iters, workers and checkpoint interval must be positive")
 	}
-	if *regret != "plus" && *regret != "vanilla" {
-		return fmt.Errorf("regret must be plus or vanilla")
+	if *prior != "" && (*resume != "" || *priorStrength <= 0 || math.IsNaN(*priorStrength) || math.IsInf(*priorStrength, 0)) {
+		return fmt.Errorf("blueprint initialization requires finite positive prior strength and no resumed state")
+	}
+	if *fixedOnly && ((*prior == "" && *resume == "") || *fixed == "" || *minVisits > 1 || *resetAvg) {
+		return fmt.Errorf("fixed-only requires init-blueprint or a matching resumed state, fixed, minvisits at most 1, and no resetavg")
+	}
+	if *frozenRollouts && !*fixedOnly {
+		return fmt.Errorf("frozen-rollouts requires fixed-only")
+	}
+	if *regret != "plus" && *regret != "vanilla" && *regret != "discounted" {
+		return fmt.Errorf("regret must be plus, vanilla, or discounted")
+	}
+	if *regret == "discounted" && (*discountEvery <= 0 || *resume != "") {
+		return fmt.Errorf("discounted regret requires a positive discount period and a fresh run; legacy checkpoints do not record discount boundaries")
 	}
 	if *modelScope != "decision" && *modelScope != "hand" {
 		return fmt.Errorf("model-scope must be decision or hand")
@@ -179,16 +207,41 @@ func train(args []string) error {
 	if *weight > 0 && *modelName == "" {
 		return fmt.Errorf("positive weight requires an opponent model")
 	}
+	if *averageEvery < 1 || (*averageEvery > 1 && (*modelName == "" || *weight <= 0)) {
+		return fmt.Errorf("average-every must be positive; values above 1 require a model and positive weight")
+	}
+	if *sampleModelDraws && (*modelScope != "hand" || *modelName == "" || *weight <= 0) {
+		return fmt.Errorf("sample-model-draws requires a model, positive weight, and model-scope hand")
+	}
+	if *uniformModelDraws && !*sampleModelDraws {
+		return fmt.Errorf("uniform-model-draws requires sample-model-draws")
+	}
+	if *drawBaseline && !*sampleModelDraws {
+		return fmt.Errorf("draw-baseline requires sample-model-draws")
+	}
+	if *compression < 1 || *compression > 9 {
+		return fmt.Errorf("compression must be between 1 and 9")
+	}
 	w := newWorld()
+	if *fixedOnly && w.layout.FixedGroups <= 1 {
+		return fmt.Errorf("fixed-only requires a fixed-card layout")
+	}
 	model, err := w.model(*modelName, 0)
 	if err != nil {
 		return err
 	}
 	tr := cfr.NewTrainer(w.tree, w.abs, w.layout, w.eval)
-	tr.Vanilla = *regret == "vanilla"
+	tr.Vanilla = *regret != "plus"
+	tr.UniformAverage = *regret == "discounted"
 	tr.Model, tr.ModelWeight = model, *weight
 	tr.ModelByHand = *modelScope == "hand"
+	tr.AverageEvery = *averageEvery
+	tr.UseDrawBaseline = *drawBaseline
+	tr.SampleModelDraws = *sampleModelDraws
+	tr.UniformModelDraws = *uniformModelDraws
 	tr.FixedHidden = *hidden
+	tr.FixedOnly = *fixedOnly
+	tr.FrozenRollouts = *frozenRollouts
 	if *fixed == "random" {
 		tr.FixedRandom = true
 	} else if *fixed != "" {
@@ -210,8 +263,18 @@ func train(args []string) error {
 			clear(tr.DrawVisits)
 		}
 	}
-	fmt.Fprintf(os.Stderr, "tables: %d bet slots, %d draw slots; model=%q weight=%.2f scope=%s regret=%s\n",
-		w.layout.BetSlots, w.layout.DrawSlots, *modelName, *weight, *modelScope, *regret)
+	if *prior != "" {
+		pl, err := w.load(*prior, 0)
+		if err != nil {
+			return err
+		}
+		if err := tr.SeedBlueprint(pl.BP, *priorStrength); err != nil {
+			return err
+		}
+		fmt.Fprintf(os.Stderr, "initialized from blueprint %s with prior strength %g; extract with minvisits=1 to retain untouched prior sets\n", *prior, *priorStrength)
+	}
+	fmt.Fprintf(os.Stderr, "tables: %d bet slots, %d draw slots; model=%q weight=%.2f scope=%s regret=%s average-every=%d\n",
+		w.layout.BetSlots, w.layout.DrawSlots, *modelName, *weight, *modelScope, *regret, *averageEvery)
 
 	done, stopped := make(chan struct{}), make(chan struct{})
 	initialIterations := tr.Iterations()
@@ -228,21 +291,29 @@ func train(args []string) error {
 				n := tr.Iterations()
 				fmt.Fprintf(os.Stderr, "%s: %d iterations, %.0f/s\n", time.Since(start).Round(time.Second), n,
 					float64(n-initialIterations)/time.Since(start).Seconds())
-				if err := save(tr, *out, *statePath, uint32(*minVisits)); err != nil {
+				if err := saveLevel(tr, *out, *statePath, uint32(*minVisits), *compression); err != nil {
 					fmt.Fprintln(os.Stderr, "checkpoint:", err)
 				}
 			}
 		}
 	}()
 	start := time.Now()
-	tr.Run(*iters, *workers, *seed)
+	if *regret == "discounted" {
+		runDiscounted(tr, *iters, *discountEvery, *workers, *seed)
+	} else {
+		tr.Run(*iters, *workers, *seed)
+	}
 	close(done)
 	<-stopped
 	fmt.Fprintf(os.Stderr, "done: %d new iterations (%d total) in %s\n", tr.Iterations()-initialIterations, tr.Iterations(), time.Since(start).Round(time.Second))
-	return save(tr, *out, *statePath, uint32(*minVisits))
+	return saveLevel(tr, *out, *statePath, uint32(*minVisits), *compression)
 }
 
 func save(tr *cfr.Trainer, path, statePath string, minVisits uint32) error {
+	return saveLevel(tr, path, statePath, minVisits, 9)
+}
+
+func saveLevel(tr *cfr.Trainer, path, statePath string, minVisits uint32, compression int) error {
 	if statePath != "" {
 		if err := tr.SaveState(statePath); err != nil {
 			return err
@@ -253,7 +324,7 @@ func save(tr *cfr.Trainer, path, statePath string, minVisits uint32) error {
 	if err != nil {
 		return err
 	}
-	if err := tr.Extract(minVisits).Encode(f); err != nil {
+	if err := tr.Extract(minVisits).EncodeLevel(f, compression); err != nil {
 		f.Close()
 		return err
 	}
@@ -333,7 +404,7 @@ func stats(args []string) error {
 				continue
 			}
 			n := int64(len(node.Acts))
-			count := int64(cfr.BetContexts(street)) * int64(w.layout.Buckets(street))
+			count := int64(cfr.BetContexts(street)) * int64(pl.Layout.Buckets(street))
 			for set := int64(0); set < count; set++ {
 				sets++
 				slot := node.Offset + set*n
@@ -345,7 +416,7 @@ func stats(args []string) error {
 		lines = append(lines, fmt.Sprintf("street %d: %d/%d betting sets trained", street, trained, sets))
 	}
 	sets, trained := 0, 0
-	for slot := int64(0); slot < w.layout.DrawSlots; slot += cfr.MaxCand {
+	for slot := int64(0); slot < pl.Layout.DrawSlots; slot += cfr.MaxCand {
 		sets++
 		if pl.BP.Draw[slot] != 0 || pl.BP.Draw[slot+1] != 0 {
 			trained++

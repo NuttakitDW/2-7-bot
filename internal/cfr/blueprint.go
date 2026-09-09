@@ -75,7 +75,14 @@ const blueprintMagic = "27bp"
 // Encode writes the blueprint gzip-compressed. Unreached sets are zero
 // runs, which is most of the table, so this is small.
 func (bp *Blueprint) Encode(w io.Writer) error {
-	zw, err := gzip.NewWriterLevel(w, gzip.BestCompression)
+	return bp.EncodeLevel(w, gzip.BestCompression)
+}
+
+// EncodeLevel writes the same policy format with a chosen gzip compression level.
+// BestSpeed is useful for temporary experiment artifacts; Encode retains the
+// compact release default.
+func (bp *Blueprint) EncodeLevel(w io.Writer, level int) error {
+	zw, err := gzip.NewWriterLevel(w, level)
 	if err != nil {
 		return err
 	}

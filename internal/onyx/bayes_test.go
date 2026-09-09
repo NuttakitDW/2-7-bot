@@ -95,3 +95,22 @@ func BenchmarkBayesianRiver(b *testing.B) {
 		_, _ = s.decide(1, hand, d)
 	}
 }
+
+func TestRiverMemoConfiguration(t *testing.T) {
+	oldBits, oldAlpha := beliefMemoBits, riverResponseAlpha
+	t.Cleanup(func() { beliefMemoBits, riverResponseAlpha = oldBits, oldAlpha })
+	beliefMemoBits, riverResponseAlpha = "4", "3"
+	solver, err := newRiverSolver()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if solver.model.ResponseAlpha != 3 {
+		t.Fatal("cache lost response sharpening")
+	}
+	for _, bits := range []string{"-1", "26", "bad"} {
+		beliefMemoBits = bits
+		if _, err := newRiverSolver(); err == nil {
+			t.Fatalf("accepted memo bits %s", bits)
+		}
+	}
+}

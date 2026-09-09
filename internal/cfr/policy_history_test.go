@@ -12,8 +12,8 @@ func TestPolicyHistoryFeaturesUseOnlyPriorActions(t *testing.T) {
 		t.Helper()
 		v := View{Node: id, Seat: seat, Hand: five("2c", "3d", "4h", "7s", "Kc")}
 		x := PolicyFeatures(&v)
-		if len(x) != 60 {
-			t.Fatalf("features=%d, want 60", len(x))
+		if len(x) != 64 {
+			t.Fatalf("features=%d, want 64", len(x))
 		}
 		for i, value := range want {
 			if x[32+i] != value {
@@ -56,7 +56,7 @@ func TestPolicyHistoryRejectsUnknownNode(t *testing.T) {
 	for _, v := range []View{{Node: -1}, {Node: 1 << 30}} {
 		v.Hand = five("2c", "3d", "4h", "7s", "Kc")
 		x := PolicyFeatures(&v)
-		for i := 32; i < len(x); i++ {
+		for i := 32; i < 60; i++ {
 			if x[i] != 0 {
 				t.Fatal("invalid public node produced a history")
 			}

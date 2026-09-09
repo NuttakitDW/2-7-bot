@@ -22,6 +22,9 @@ type Empirical struct {
 	// Versions 4 and 5 average leaf distributions from multiple fitted trees.
 	BettingForest [4][][]PolicyNode `json:"betting_forest,omitempty"`
 	DrawingForest [3][][]PolicyNode `json:"drawing_forest,omitempty"`
+	// Version 8 uses additive logits instead of averaged leaf probabilities.
+	BettingBoost [4]*PolicyBoost `json:"betting_boost,omitempty"`
+	DrawingBoost [3]*PolicyBoost `json:"drawing_boost,omitempty"`
 
 	// ResponseAlpha sharpens river response predictions (responseProbabilities).
 	ResponseAlpha float64 `json:"-"`
@@ -60,7 +63,7 @@ type PolicyNode struct {
 	Prob      [6]float64 `json:"prob"`
 }
 
-const PolicyFeatureCount = 60
+const PolicyFeatureCount = 64
 
 // PolicyFeatures version 2 adds pot size, call size and pot odds at 29..31.
 // Version 5 adds prior public actions at 32..55, six counts per street:
@@ -69,8 +72,19 @@ const PolicyFeatureCount = 60
 // threshold on it isolates a subtree, which is a history prefix), the
 // draw-count difference on the latest draw, total opponent wagers so far,
 // and whether the acting player made the hand's last wager.
+// Version 7 adds at 60..63 static-opponent equity with zero through three
+// future draws. These describe private drawing potential, not opponent ranges.
 // Card ranks use deuce=2 through ace=14; sizes are in big bets.
 func PolicyFeatures(v *View) [PolicyFeatureCount]float64 {
+	x := policyFeatures(v)
+	equity := policyEquities()[handclass.Of(v.Hand[:])]
+	copy(x[60:], equity[:])
+	return x
+}
+
+// Older model versions retain their original inputs and avoid constructing
+// the equity table. The public exporter includes every current feature.
+func policyFeatures(v *View) [PolicyFeatureCount]float64 {
 	x := policyPrivateFeatures[handclass.Of(v.Hand[:])]
 	x[0], x[1], x[2] = float64(v.Seat), float64(v.Wagers), float64(AggrState(v.Seat, v.LastAggr))
 	if v.Facing {
@@ -156,8 +170,24 @@ func DecodeEmpirical(raw []byte) (*Empirical, error) {
 	if err := json.Unmarshal(raw, &m); err != nil {
 		return nil, err
 	}
-	if m.Version < 1 || m.Version > 6 {
+	if m.Version < 1 || m.Version > 8 {
 		return nil, fmt.Errorf("unsupported empirical model version %d", m.Version)
+	}
+	if m.Version == 8 {
+		if err := m.validateBoosts(); err != nil {
+			return nil, err
+		}
+		return &m, nil
+	}
+	for _, b := range m.BettingBoost {
+		if b != nil {
+			return nil, fmt.Errorf("older model contains a betting boost")
+		}
+	}
+	for _, b := range m.DrawingBoost {
+		if b != nil {
+			return nil, fmt.Errorf("older model contains a drawing boost")
+		}
 	}
 	featureCount := PolicyFeatureCount
 	if m.Version == 1 {
@@ -166,6 +196,8 @@ func DecodeEmpirical(raw []byte) (*Empirical, error) {
 		featureCount = 32
 	} else if m.Version == 5 {
 		featureCount = 56
+	} else if m.Version == 6 {
+		featureCount = 60
 	}
 	validate := func(nodes []PolicyNode) error {
 		if len(nodes) == 0 {
@@ -279,7 +311,10 @@ func (m *Empirical) predictBet(v *View) [6]float64 {
 }
 
 func (m *Empirical) computeBet(v *View) [6]float64 {
-	x := PolicyFeatures(v)
+	x := m.features(v)
+	if m.Version == 8 {
+		return m.BettingBoost[v.Street].predict(&x)
+	}
 	if m.Version >= 4 {
 		return predictCompact(m.compile().betting[v.Street], &x)
 	}
@@ -294,11 +329,21 @@ func (m *Empirical) predictDraw(v *View) [6]float64 {
 }
 
 func (m *Empirical) computeDraw(v *View) [6]float64 {
-	x := PolicyFeatures(v)
+	x := m.features(v)
+	if m.Version == 8 {
+		return m.DrawingBoost[v.Street-1].predict(&x)
+	}
 	if m.Version >= 4 {
 		return predictCompact(m.compile().drawing[v.Street-1], &x)
 	}
 	return predictPolicy(m.Drawing[v.Street-1], &x)
+}
+
+func (m *Empirical) features(v *View) [PolicyFeatureCount]float64 {
+	if m.Version >= 7 {
+		return PolicyFeatures(v)
+	}
+	return policyFeatures(v)
 }
 
 func samplePolicy(p [6]float64, n int, r float64) (int, bool) {

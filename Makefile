@@ -114,6 +114,7 @@ AZURITE_BUCKETS ?= 160,160,160
 AZURITE_FIXED ?= none
 AZURITE_BLUEPRINT ?= bin/azurite.bin.gz
 AZURITE_BOT_NAME ?= 2-7-azurite-1
+AZURITE_NATIVE_PATH ?= bin/bot-azurite
 AZURITE_CFR_LDFLAGS = -X github.com/nuttakit/2-7-bot/internal/cfr.handProfile=equity \
 	-X github.com/nuttakit/2-7-bot/internal/cfr.equityProfile=$(AZURITE_BUCKETS) \
 	-X github.com/nuttakit/2-7-bot/internal/cfr.fixedProfile=$(AZURITE_FIXED)
@@ -140,7 +141,7 @@ bot-azurite:
 	@overlay=$$(mktemp "$$(pwd)/bin/azurite-overlay.XXXXXX"); \
 	  trap 'rm -f "$$overlay"' EXIT; \
 	  $(AZURITE_OVERLAY) "$$overlay" "$(AZURITE_BLUEPRINT)" && \
-	  go build -overlay "$$overlay" -ldflags='$(AZURITE_LDFLAGS)' -o bin/bot-azurite ./cmd/bot
+	  go build -overlay "$$overlay" -ldflags='$(AZURITE_LDFLAGS)' -o $(AZURITE_NATIVE_PATH) ./cmd/bot
 
 bot-azurite-release:
 	@test -f "$(AZURITE_BLUEPRINT)"
@@ -156,3 +157,21 @@ bot-azurite-release:
 blueprint:
 	go run ./cmd/cfrgen train -model cobalt -weight 1 -iters 100000 \
 	  -workers 1 -seed 1 -minvisits 20 -out internal/lapis/blueprint.bin.gz
+
+# Obsidian stores its per-street selection in the blueprint itself.
+# Create it with cfrgen-azurite select; do not purify it a second time.
+OBSIDIAN_BLUEPRINT ?= bin/obsidian/selected.bin.gz
+OBSIDIAN_BOT_NAME ?= 2-7-obsidian-1
+OBSIDIAN_BUCKETS ?= 160,160,160
+OBSIDIAN_FIXED ?= none
+
+.PHONY: bot-obsidian bot-obsidian-release
+bot-obsidian:
+	$(MAKE) bot-azurite AZURITE_BLUEPRINT=$(OBSIDIAN_BLUEPRINT) \
+	  AZURITE_BUCKETS=$(OBSIDIAN_BUCKETS) AZURITE_FIXED=$(OBSIDIAN_FIXED) \
+	  AZURITE_PURIFY=0 AZURITE_GREEDY=false AZURITE_NATIVE_PATH=bin/bot-obsidian
+
+bot-obsidian-release:
+	$(MAKE) bot-azurite-release AZURITE_BLUEPRINT=$(OBSIDIAN_BLUEPRINT) \
+	  AZURITE_BUCKETS=$(OBSIDIAN_BUCKETS) AZURITE_FIXED=$(OBSIDIAN_FIXED) \
+	  AZURITE_PURIFY=0 AZURITE_GREEDY=false AZURITE_BOT_NAME=$(OBSIDIAN_BOT_NAME)
