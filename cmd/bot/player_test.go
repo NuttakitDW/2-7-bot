@@ -67,3 +67,28 @@ func TestEmpiricalProfileRunsWireSession(t *testing.T) {
 		t.Run(fmt.Sprint(hero), func(t *testing.T) { playProtocolSession(t, hero) })
 	}
 }
+
+func TestRiverResponseProfileRejectsBlueprintBeforeJoining(t *testing.T) {
+	old := playerProfile
+	playerProfile = "river-response"
+	t.Cleanup(func() { playerProfile = old })
+	var replies bytes.Buffer
+	if err := run(strings.NewReader(session), &replies, io.Discard); err == nil {
+		t.Fatal("accepted incompatible response payload")
+	}
+	if replies.Len() != 0 {
+		t.Fatal("joined with invalid response artifact")
+	}
+}
+
+func TestRiverResponseProfileRunsWireSession(t *testing.T) {
+	if os.Getenv("RIVER_RESPONSE_PROFILE_TEST") == "" {
+		t.Skip("no river response build overlay supplied")
+	}
+	old := playerProfile
+	playerProfile = "river-response"
+	t.Cleanup(func() { playerProfile = old })
+	for hero := 0; hero < 2; hero++ {
+		t.Run(fmt.Sprint(hero), func(t *testing.T) { playProtocolSession(t, hero) })
+	}
+}

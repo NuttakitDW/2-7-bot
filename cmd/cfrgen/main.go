@@ -26,13 +26,15 @@ import (
 
 func main() {
 	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "usage: cfrgen train|eval|stats|probe|refine|exploit|select [flags]")
+		fmt.Fprintln(os.Stderr, "usage: cfrgen train|river-train|eval|stats|probe|refine|exploit|select [flags]")
 		os.Exit(2)
 	}
 	var err error
 	switch os.Args[1] {
 	case "train":
 		err = train(os.Args[2:])
+	case "river-train":
+		err = trainRiver(os.Args[2:])
 	case "eval":
 		err = eval(os.Args[2:])
 	case "stats":
@@ -86,6 +88,13 @@ func (w *world) load(path string, purify float64) (*cfr.Player, error) {
 
 // model resolves an opponent name: a heuristic, or a blueprint file.
 func (w *world) model(name string, purify float64) (cfr.Model, error) {
+	if path, ok := strings.CutPrefix(name, "response:"); ok {
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			return nil, err
+		}
+		return cfr.DecodeRiverResponse(raw, w.tree)
+	}
 	if rest, sharp := strings.CutPrefix(name, "sharp:"); sharp {
 		// sharp:ALPHA:FILE.json
 		alphaText, path, ok := strings.Cut(rest, ":")
@@ -340,6 +349,7 @@ func eval(args []string) error {
 	vs := fs.String("vs", "cobalt", "opponent: cobalt, h3, blueprint, empirical JSON, or mode:FILE.json")
 	hands := fs.Int("hands", 100_000, "decks to play, each twice")
 	seed := fs.Uint64("seed", 7, "deal seed")
+	responseMinVisits := fs.Uint64("response-minvisits", 0, "minimum training visits for a response overlay")
 	purify := fs.Float64("purify", 0, "drop actions under this probability")
 	greedy := fs.Bool("greedy", false, "hero uses the most likely trained action")
 	fixed := fs.String("fixed", "", "card dealt to the big blind every hand: e.g. Qh, or random")
@@ -357,12 +367,18 @@ func eval(args []string) error {
 	if err != nil {
 		return err
 	}
+	if response, ok := hero.(*cfr.RiverResponse); ok {
+		response.MinVisits = *responseMinVisits
+	}
 	if *greedy {
-		player, ok := hero.(*cfr.Player)
-		if !ok {
+		switch player := hero.(type) {
+		case *cfr.Player:
+			player.Greedy = true
+		case *cfr.RiverResponse:
+			player.Greedy = true
+		default:
 			return fmt.Errorf("greedy requires a blueprint hero")
 		}
-		player.Greedy = true
 	}
 	villain, err := w.model(*vs, *purify)
 	if err != nil {

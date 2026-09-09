@@ -30,8 +30,9 @@ var blueprintData []byte
 // converged: an unconverged average carries residual weight on actions it
 // has all but abandoned, and playing those costs real chips.
 var (
-	Purify = "0.05"
-	Greedy = "false"
+	Purify            = "0.05"
+	Greedy            = "false"
+	ResponseMinVisits = "50"
 )
 
 // lost marks a hand the tracker could not follow; the heuristic plays it.
@@ -89,6 +90,25 @@ func NewEmpirical() (*Bot, error) {
 		return nil, fmt.Errorf("lapis empirical: %w", err)
 	}
 	return NewModel(m.Mode()), nil
+}
+
+// NewRiverResponse loads a fitted base policy with a trained sparse river
+// response, packaged together in the embedded payload.
+func NewRiverResponse() (*Bot, error) {
+	tree := cfr.BuildTree()
+	m, err := cfr.DecodeRiverResponse(blueprintData, tree)
+	if err != nil {
+		return nil, fmt.Errorf("lapis river response: %w", err)
+	}
+	m.Greedy, err = strconv.ParseBool(Greedy)
+	if err != nil {
+		return nil, fmt.Errorf("lapis: bad greedy %q", Greedy)
+	}
+	m.MinVisits, err = strconv.ParseUint(ResponseMinVisits, 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("lapis: bad response minimum visits %q", ResponseMinVisits)
+	}
+	return NewModel(m), nil
 }
 
 // New decodes the embedded blueprint. It fails only on a build whose
