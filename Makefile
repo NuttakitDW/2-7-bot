@@ -18,7 +18,7 @@ ONYX_DEFENSE ?= original
 ONYX_LDFLAGS = -X github.com/nuttakit/2-7-bot/internal/onyx.predrawProfile=$(ONYX_OPEN) \
 	-X github.com/nuttakit/2-7-bot/internal/onyx.predrawDefense=$(ONYX_DEFENSE)
 
-.PHONY: help arena bot bot-release bot-model-release bot-model test fmt vet docs-check engine spar
+.PHONY: help arena bot bot-release bot-model-release bot-model test fmt vet docs-check engine spar sixmax sixmax-release sixmax-spar sixmax-spar-mixed sixmax-fit sixmax-clone-fit sixmax-h3 sixmax-h3-release sixmax-h3-spar-mixed sixmax-h4-aggr sixmax-h4-aggr-release sixmax-h4-both sixmax-h4-both-release sixmax-h5 sixmax-h5-release sixmax-h5b-fit sixmax-h5b sixmax-h5b-release
 
 help:
 	@echo 'arena       build the harness CLI into bin/arena'
@@ -30,6 +30,8 @@ help:
 	@echo 'docs-check  verify vendored protocol docs match upstream $(ENGINE_SHA)'
 	@echo 'engine      clone + build the upstream poker-arena CLI'
 	@echo 'spar        run BOT against builtin:random locally'
+	@echo 'sixmax     build the native six-player bot into bin/bot-sixmax'
+	@echo 'sixmax-release build the static Linux six-player upload artifact'
 
 arena:
 	go build -o bin/arena ./cmd/arena
@@ -105,6 +107,138 @@ spar: engine bot
 	  --bot 'baseline@builtin:random' \
 	  --timeout-ms 1000 \
 	  --output json
+
+SIXMAX_BOT_NAME ?= nutt-27td-fl-6max-h2
+SIXMAX_NATIVE_PATH ?= bin/bot-sixmax
+SIXMAX_HANDS ?= 1000
+SIXMAX_SEED ?= 270601
+SIXMAX_H3_NAME ?= nutt-27td-fl-6max-h3
+SIXMAX_H3_NATIVE_PATH ?= bin/bot-sixmax-h3
+SIXMAX_RANGE_MODEL ?= bin/sixmax/range-h3.json
+SIXMAX_RANGE_SUMMARY ?= bin/sixmax/range-h3-summary.json
+SIXMAX_RANGE_MATCHES ?= 36,37,38,39,41,85,101,102,103
+SIXMAX_CLONE_MATCHES ?= 36,37,38,39,41,77,84,85,101,102,1081,1086
+SIXMAX_CLONE_MODEL ?= bin/sixmax/models/clone-predraw-h5.json
+SIXMAX_CLONE_METRICS ?= bin/sixmax/models/clone-predraw-h5-metrics.json
+SIXMAX_H5_NATIVE_PATH ?= bin/bot-sixmax-h5
+SIXMAX_H5_NAME ?= nutt-27td-fl-6max-h5
+SIXMAX_H5B_MODEL ?= bin/sixmax/models/clone-predraw-h5b.json
+SIXMAX_H5B_METRICS ?= bin/sixmax/models/clone-predraw-h5b-metrics.json
+SIXMAX_H5B_SOURCES ?= bin/sixmax/models/clone-predraw-h5b-sources.json
+SIXMAX_H5B_NATIVE_PATH ?= bin/bot-sixmax-h5b
+SIXMAX_H5B_NAME ?= nutt-27td-fl-6max-h5b
+SIXMAX_H5B_TRAIN_MATCHES ?= 36,37,38,39,41,77,84,85,101,102,1081,1086
+SIXMAX_H5B_TRAIN ?= bin/sixmax/clone-data/pilot/match-1094,bin/sixmax/clone-data/pilot/match-1095,bin/sixmax/clone-data/pilot/match-1096,bin/sixmax/clone-data/train/match-1097,bin/sixmax/clone-data/train/match-1098,bin/sixmax/clone-data/train/match-1099,bin/sixmax/clone-data/train/match-1100,bin/sixmax/clone-data/train/match-1101,bin/sixmax/clone-data/train/match-1102,bin/sixmax/clone-data/train/match-1103,bin/sixmax/clone-data/train/match-1104,bin/sixmax/clone-data/train/match-1105,bin/sixmax/clone-data/train/match-1109,bin/sixmax/clone-data/train/match-1110,bin/sixmax/clone-data/train/match-1111,bin/sixmax/clone-data/train/match-1115,bin/sixmax/clone-data/train/match-1116,bin/sixmax/clone-data/train/match-1117,bin/sixmax/clone-data/train/match-1118,bin/sixmax/clone-data/train/match-1119,bin/sixmax/clone-data/train/match-1120,bin/sixmax/clone-data/train/match-1121
+SIXMAX_H5B_VALIDATION ?= bin/sixmax/clone-data/validation/match-1112,bin/sixmax/clone-data/validation/match-1113,bin/sixmax/clone-data/validation/match-1114
+SIXMAX_RANGE_OVERLAY = python3 -c 'import json,pathlib,sys; r=pathlib.Path.cwd(); pathlib.Path(sys.argv[1]).write_text(json.dumps({"Replace":{str(r/"internal/sixmaxrange/default_model.json"):str(pathlib.Path(sys.argv[2]).resolve())}}))'
+SIXMAX_CLONE_OVERLAY = python3 -c 'import json,pathlib,sys; r=pathlib.Path.cwd(); pathlib.Path(sys.argv[1]).write_text(json.dumps({"Replace":{str(r/"internal/sixmaxclone/default_model.json"):str(pathlib.Path(sys.argv[2]).resolve())}}))'
+SIXMAX_VALUE_LDFLAGS = -X main.valueAggression=true -X main.rangeCalls=false
+SIXMAX_BOTH_LDFLAGS = $(SIXMAX_VALUE_LDFLAGS) -X main.earlyTenBreak=true
+
+sixmax:
+	@mkdir -p bin
+	go build -o $(SIXMAX_NATIVE_PATH) ./cmd/sixmax
+
+sixmax-release:
+	@mkdir -p bin
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+	  go build -trimpath -ldflags='-s -w' -o bin/$(SIXMAX_BOT_NAME) ./cmd/sixmax
+
+sixmax-fit:
+	go run ./cmd/sixmaxfit -data bin/sixmax/data -matches $(SIXMAX_RANGE_MATCHES) \
+	  -holdout 103 -out $(SIXMAX_RANGE_MODEL) -summary $(SIXMAX_RANGE_SUMMARY)
+
+sixmax-clone-fit:
+	go run ./cmd/sixmaxclonefit -data bin/sixmax/data -matches $(SIXMAX_CLONE_MATCHES) \
+	  -out $(SIXMAX_CLONE_MODEL) -metrics $(SIXMAX_CLONE_METRICS)
+
+sixmax-h5: sixmax-clone-fit
+	@overlay=$$(mktemp "$$(pwd)/bin/sixmax-h5-overlay.XXXXXX"); \
+	  trap 'rm -f "$$overlay"' EXIT; \
+	  $(SIXMAX_CLONE_OVERLAY) "$$overlay" "$(SIXMAX_CLONE_MODEL)" && \
+	  go build -overlay "$$overlay" -ldflags='-X main.clonePredraw=true' -o $(SIXMAX_H5_NATIVE_PATH) ./cmd/sixmax
+
+sixmax-h5-release: sixmax-clone-fit
+	@overlay=$$(mktemp "$$(pwd)/bin/sixmax-h5-overlay.XXXXXX"); \
+	  trap 'rm -f "$$overlay"' EXIT; \
+	  $(SIXMAX_CLONE_OVERLAY) "$$overlay" "$(SIXMAX_CLONE_MODEL)" && \
+	  CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -overlay "$$overlay" \
+	    -ldflags='-s -w -X main.clonePredraw=true' -o bin/$(SIXMAX_H5_NAME) ./cmd/sixmax
+
+sixmax-h5b-fit:
+	go run ./cmd/sixmaxclonefit -data bin/sixmax/data -training-matches $(SIXMAX_H5B_TRAIN_MATCHES) \
+	  -train-dirs $(SIXMAX_H5B_TRAIN) -validation-dirs $(SIXMAX_H5B_VALIDATION) \
+	  -out $(SIXMAX_H5B_MODEL) -metrics $(SIXMAX_H5B_METRICS) -source-snapshot $(SIXMAX_H5B_SOURCES)
+
+sixmax-h5b: sixmax-h5b-fit
+	@overlay=$$(mktemp "$$(pwd)/bin/sixmax-h5b-overlay.XXXXXX"); \
+	  trap 'rm -f "$$overlay"' EXIT; \
+	  $(SIXMAX_CLONE_OVERLAY) "$$overlay" "$(SIXMAX_H5B_MODEL)" && \
+	  go build -overlay "$$overlay" -ldflags='-X main.clonePredraw=true' -o $(SIXMAX_H5B_NATIVE_PATH) ./cmd/sixmax
+
+sixmax-h5b-release: sixmax-h5b-fit
+	@overlay=$$(mktemp "$$(pwd)/bin/sixmax-h5b-overlay.XXXXXX"); \
+	  trap 'rm -f "$$overlay"' EXIT; \
+	  $(SIXMAX_CLONE_OVERLAY) "$$overlay" "$(SIXMAX_H5B_MODEL)" && \
+	  CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -overlay "$$overlay" \
+	    -ldflags='-s -w -X main.clonePredraw=true' -o bin/$(SIXMAX_H5B_NAME) ./cmd/sixmax
+
+sixmax-h3: sixmax-fit
+	@overlay=$$(mktemp "$$(pwd)/bin/sixmax-h3-overlay.XXXXXX"); \
+	  trap 'rm -f "$$overlay"' EXIT; \
+	  $(SIXMAX_RANGE_OVERLAY) "$$overlay" "$(SIXMAX_RANGE_MODEL)" && \
+	  go build -overlay "$$overlay" -ldflags='-X main.rangeCalls=true' -o $(SIXMAX_H3_NATIVE_PATH) ./cmd/sixmax
+
+sixmax-h3-release: sixmax-fit
+	@overlay=$$(mktemp "$$(pwd)/bin/sixmax-h3-overlay.XXXXXX"); \
+	  trap 'rm -f "$$overlay"' EXIT; \
+	  $(SIXMAX_RANGE_OVERLAY) "$$overlay" "$(SIXMAX_RANGE_MODEL)" && \
+	  CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -overlay "$$overlay" \
+	    -ldflags='-s -w -X main.rangeCalls=true' -o bin/$(SIXMAX_H3_NAME) ./cmd/sixmax
+
+sixmax-h4-aggr:
+	go build -ldflags='$(SIXMAX_VALUE_LDFLAGS)' -o bin/bot-sixmax-h4-aggr ./cmd/sixmax
+
+sixmax-h4-aggr-release:
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath \
+	  -ldflags='-s -w $(SIXMAX_VALUE_LDFLAGS)' -o bin/nutt-27td-fl-6max-h4-aggr ./cmd/sixmax
+
+sixmax-h4-both:
+	go build -ldflags='$(SIXMAX_BOTH_LDFLAGS)' -o bin/bot-sixmax-h4-both ./cmd/sixmax
+
+sixmax-h4-both-release:
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath \
+	  -ldflags='-s -w $(SIXMAX_BOTH_LDFLAGS)' -o bin/nutt-27td-fl-6max-h4-both ./cmd/sixmax
+
+sixmax-spar: engine sixmax
+	$(ENGINE_BIN) run --game 27td-fl --hands $(SIXMAX_HANDS) --seed $(SIXMAX_SEED) \
+	  --fault-policy forfeit --timeout-ms 1000 --output json \
+	  --log bin/sixmax-callers-seed$(SIXMAX_SEED).jsonl --log-sample 6 --log-top 12 \
+	  --bot 'candidate@cmd:$(SIXMAX_NATIVE_PATH)' \
+	  --bot 'caller-1@builtin:caller' --bot 'caller-2@builtin:caller' \
+	  --bot 'caller-3@builtin:caller' --bot 'caller-4@builtin:caller' \
+	  --bot 'caller-5@builtin:caller' \
+	  > bin/sixmax-callers-seed$(SIXMAX_SEED).json
+
+sixmax-spar-mixed: engine sixmax
+	$(ENGINE_BIN) run --game 27td-fl --hands $(SIXMAX_HANDS) --seed $(SIXMAX_SEED) \
+	  --fault-policy forfeit --timeout-ms 1000 --output json \
+	  --log bin/sixmax-mixed-seed$(SIXMAX_SEED).jsonl --log-sample 6 --log-top 12 \
+	  --bot 'candidate@cmd:$(SIXMAX_NATIVE_PATH)' \
+	  --bot 'caller-1@builtin:caller' --bot 'caller-2@builtin:caller' \
+	  --bot 'random-1@builtin:random:1' --bot 'random-2@builtin:random:2' \
+	  --bot 'shover@builtin:shover' \
+	  > bin/sixmax-mixed-seed$(SIXMAX_SEED).json
+
+sixmax-h3-spar-mixed: engine sixmax-h3
+	$(ENGINE_BIN) run --game 27td-fl --hands $(SIXMAX_HANDS) --seed $(SIXMAX_SEED) \
+	  --fault-policy forfeit --timeout-ms 1000 --output json \
+	  --log bin/sixmax-h3-mixed-seed$(SIXMAX_SEED).jsonl --log-sample 6 --log-top 12 \
+	  --bot 'candidate@cmd:$(SIXMAX_H3_NATIVE_PATH)' \
+	  --bot 'caller-1@builtin:caller' --bot 'caller-2@builtin:caller' \
+	  --bot 'random-1@builtin:random:1' --bot 'random-2@builtin:random:2' \
+	  --bot 'shover@builtin:shover' \
+	  > bin/sixmax-h3-mixed-seed$(SIXMAX_SEED).json
 
 # Azurite: the equity-bucketed self-play blueprint, selected by local
 # exploitability (cfrgen exploit) rather than hosted matches. The blueprint

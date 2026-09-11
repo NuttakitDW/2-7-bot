@@ -1,0 +1,1 @@
+{"schema":1,"source":"unsupported build default","minGroups":20,"minConfidence":0.85,"minMargin":0,"trees":{"facing":{"nodes":[{"leaf":{"groups":0,"probabilities":[0,1,0]}}]},"checked":{"nodes":[{"leaf":{"groups":0,"probabilities":[0,1,0]}}]}}}
