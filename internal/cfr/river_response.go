@@ -126,6 +126,23 @@ func NewRiverResponse(base Model, policy *RiverPolicy, tree *Tree) *RiverRespons
 	return r
 }
 
+// EmpiricalBase returns the fitted policy packaged under this response.
+// Runtime solvers use the probabilistic model while RiverResponse itself
+// continues to play the modal base policy when no trained row applies.
+func (r *RiverResponse) EmpiricalBase() (*Empirical, bool) {
+	if r == nil {
+		return nil, false
+	}
+	switch base := r.Base.(type) {
+	case empiricalMode:
+		return base.model, base.model != nil
+	case *Empirical:
+		return base, base != nil
+	default:
+		return nil, false
+	}
+}
+
 func (r *RiverResponse) Bet(v *View) (int, bool) {
 	if v.Street == Draw3 && v.Node >= 0 && int(v.Node) < len(r.contexts) {
 		row, ok := r.rows[riverKey(v, r.contexts, r.Policy.Abstraction)]

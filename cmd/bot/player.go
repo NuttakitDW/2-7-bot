@@ -29,7 +29,7 @@ type runtimeBot struct {
 // an embedded fitted policy through the same legal-action tracker.
 func newRuntimeBot() (*runtimeBot, error) {
 	switch playerProfile {
-	case "onyx", "model-bets", "learned", "learned-bayes", "azurite", "empirical", "river-response":
+	case "onyx", "model-bets", "learned", "learned-bayes", "azurite", "empirical", "river-response", "river-response-blockers":
 	default:
 		return nil, fmt.Errorf("unknown player profile %q", playerProfile)
 	}
@@ -37,7 +37,7 @@ func newRuntimeBot() (*runtimeBot, error) {
 		base, err := onyx.New()
 		return &runtimeBot{Bot: base}, err
 	}
-	if playerProfile == "azurite" || playerProfile == "empirical" || playerProfile == "river-response" {
+	if playerProfile == "azurite" || playerProfile == "empirical" || playerProfile == "river-response" || playerProfile == "river-response-blockers" {
 		base, err := onyx.New()
 		if err != nil {
 			return nil, err
@@ -47,6 +47,8 @@ func newRuntimeBot() (*runtimeBot, error) {
 			learned, err = lapis.NewEmpirical()
 		} else if playerProfile == "river-response" {
 			learned, err = lapis.NewRiverResponse()
+		} else if playerProfile == "river-response-blockers" {
+			learned, err = lapis.NewBlockerRiverResponse()
 		} else {
 			learned, err = lapis.New()
 		}

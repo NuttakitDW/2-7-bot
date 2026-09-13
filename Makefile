@@ -204,3 +204,32 @@ bot-tourmaline-release:
 	  $(AZURITE_OVERLAY) "$$overlay" "$(TOURMALINE_POLICY)" && \
 	  CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -overlay "$$overlay" \
 	    -ldflags='-s -w $(TOURMALINE_LDFLAGS)' -o bin/$(TOURMALINE_BOT_NAME) ./cmd/bot
+
+# Spinel retains Tourmaline's bundled policy and adds a blocker-aware river
+# solve using hero's held cards, private discards, and public action history.
+SPINEL_POLICY ?= bin/tourmaline/selected.json
+SPINEL_BOT_NAME ?= 2-7-spinel-1
+SPINEL_NATIVE_PATH ?= bin/bot-spinel
+SPINEL_PARTICLES ?= 512
+SPINEL_LDFLAGS = -X main.playerProfile=river-response-blockers \
+	-X github.com/nuttakit/2-7-bot/internal/lapis.Greedy=$(TOURMALINE_GREEDY) \
+	-X github.com/nuttakit/2-7-bot/internal/lapis.ResponseMinVisits=$(TOURMALINE_MIN_VISITS) \
+	-X github.com/nuttakit/2-7-bot/internal/lapis.BlockerParticles=$(SPINEL_PARTICLES)
+
+.PHONY: bot-spinel bot-spinel-release
+bot-spinel:
+	@test -f "$(SPINEL_POLICY)"
+	@mkdir -p bin
+	@overlay=$$(mktemp "$$(pwd)/bin/spinel-overlay.XXXXXX"); \
+	  trap 'rm -f "$$overlay"' EXIT; \
+	  $(AZURITE_OVERLAY) "$$overlay" "$(SPINEL_POLICY)" && \
+	  go build -overlay "$$overlay" -ldflags='$(SPINEL_LDFLAGS)' -o $(SPINEL_NATIVE_PATH) ./cmd/bot
+
+bot-spinel-release:
+	@test -f "$(SPINEL_POLICY)"
+	@mkdir -p bin
+	@overlay=$$(mktemp "$$(pwd)/bin/spinel-overlay.XXXXXX"); \
+	  trap 'rm -f "$$overlay"' EXIT; \
+	  $(AZURITE_OVERLAY) "$$overlay" "$(SPINEL_POLICY)" && \
+	  CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -overlay "$$overlay" \
+	    -ldflags='-s -w $(SPINEL_LDFLAGS)' -o bin/$(SPINEL_BOT_NAME) ./cmd/bot

@@ -125,6 +125,19 @@ func TestRiverResponseSerializationAndFallback(t *testing.T) {
 	}
 }
 
+func TestRiverResponseExposesItsEmpiricalBase(t *testing.T) {
+	base := &Empirical{Version: 1}
+	r := NewRiverResponse(base.Mode(), &RiverPolicy{Version: 1, Abstraction: "rank"}, BuildTree())
+	got, ok := r.EmpiricalBase()
+	if !ok || got != base {
+		t.Fatalf("EmpiricalBase() = %p, %v; want %p, true", got, ok, base)
+	}
+	other := NewRiverResponse(passiveModel{}, &RiverPolicy{Version: 1, Abstraction: "rank"}, BuildTree())
+	if got, ok := other.EmpiricalBase(); ok || got != nil {
+		t.Fatalf("non-empirical base = %p, %v", got, ok)
+	}
+}
+
 func TestRiverResponseContextsNeverMergeDifferentRiverGames(t *testing.T) {
 	tree := BuildTree()
 	contexts := newRiverContexts(tree)
