@@ -138,6 +138,12 @@ is unusable until all pass — so a wasted upload costs real time.
   grammar; `internal/arena/name.go` enforces it. A raceable build takes a new
   name — appending a version is for replacing a broken one and needs `--append`.
 - Table sizes are declared per upload and are **exact** — 4 does not imply 3.
+- The user has excluded the entire `paul-sauron*` family from future Arena
+  tests as malfunctioning. Mixed matches 1173 and 1175 failed in the engine
+  before dealing any hands, and match 1075 involving Paul 301 and callers also
+  failed. The exact root cause is unconfirmed, so do not generalize this to
+  other Paul bots or claim that every Sauron version was independently proven
+  faulty.
 
 ## Gotchas already hit
 

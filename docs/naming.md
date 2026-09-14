@@ -73,28 +73,33 @@ same design was built with different knobs. Either way it is a new name.
 
 ## The codename grammar
 
-Since 2026-09-05 a second, shorter grammar exists for the one game we
-actually contest:
+The short grammar is the default for the one game we actually contest:
 
 ```
-2-7-<codename>-<gen>
+27-<codename>-<gen>
+27-<codename>-<seats>-<gen>
 ```
 
 | segment | values | meaning |
 |---|---|---|
-| `2-7` | fixed | `27td-fl`, heads-up — the parser fills in `hu` and `27td-fl` |
+| `27` | fixed | `27td-fl` — the parser fills in the game id |
 | codename | one lowercase word | a strategy family, chosen fresh when the design changes |
+| seats | `6max` `hu6` `all` | optional; omit it for the heads-up default |
 | gen | `1`, `2`, … | raceable builds within the family |
 
 ```
-2-7-cobalt-1     h3's chart and draws with added aggression
-2-7-lapis-1      MCCFR blueprint, first build
+27-cobalt-1          h3's chart and draws with added aggression, heads-up
+27-lapis-1           MCCFR blueprint, first heads-up build
+27-spinel-6max-1     Spinel strategy artifact declared for six-handed play
 ```
 
 Two rules. A codename names a *design*: retuning within it bumps `gen`, a
 new architecture takes a new word. And a bot is never named after the agent
-or branch that built it — `fable` is reserved by the parser, and the branch
-`fable/2-7-fable` produced `2-7-lapis-1`, not `2-7-fable-1`.
+or branch that built it. `fable` and `nutt` are reserved by the parser; `nutt`
+keeps the short grammar distinct from the full owner-prefixed grammar.
+
+The former `2-7-<codename>-<gen>` spelling is retired. New uploads reject it
+with the equivalent `27-...` spelling in the error message.
 
 ## New name, or new version?
 
@@ -120,9 +125,8 @@ and the only version axis. We keep no local version store.
 Build to `bin/<botname>`, with no extension:
 
 ```sh
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-  go build -o bin/nutt-27td-fl-hu-b1-i050 ./cmd/bot
-arena upload --games 27td-fl --counts 2 --file bin/nutt-27td-fl-hu-b1-i050
+make bot-spinel-release
+arena upload --games 27td-fl --counts 6 --file bin/27-spinel-6max-1
 ```
 
 `--name` defaults to the filename, so the binary that was built and the name it is

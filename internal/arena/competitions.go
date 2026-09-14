@@ -116,11 +116,64 @@ func (c *Client) Competition(ctx context.Context, id string) (*Competition, erro
 
 // CreateCompetition queues a match.
 func (c *Client) CreateCompetition(ctx context.Context, config CompetitionConfig) (*Competition, error) {
+	if err := c.rejectLocallyExcludedPlayers(ctx, config.Players); err != nil {
+		return nil, err
+	}
 	var created Competition
 	if err := c.postJSON(ctx, "/api/competitions", config, &created); err != nil {
 		return nil, err
 	}
 	return &created, nil
+}
+
+func (c *Client) rejectLocallyExcludedPlayers(ctx context.Context, versionIDs []string) error {
+	bots, err := c.ListBots(ctx)
+	if err != nil {
+		return fmt.Errorf("verify Arena competition exclusions: list bots: %w", err)
+	}
+
+	requested := make(map[string]struct{}, len(versionIDs))
+	for _, id := range versionIDs {
+		requested[id] = struct{}{}
+	}
+	unknown := make(map[string]struct{}, len(requested))
+	for id := range requested {
+		unknown[id] = struct{}{}
+	}
+
+	excluded := make([]Bot, 0)
+	for _, bot := range bots {
+		reason, blocked := LocalExclusionReason(bot.Name)
+		if blocked {
+			excluded = append(excluded, bot)
+		}
+		if bot.LatestVersion == nil {
+			continue
+		}
+		if _, selected := requested[bot.LatestVersion.ID]; selected {
+			if blocked {
+				return fmt.Errorf("Arena competition rejected: bot %q: %s", bot.Name, reason)
+			}
+			delete(unknown, bot.LatestVersion.ID)
+		}
+	}
+
+	if len(unknown) == 0 {
+		return nil
+	}
+	for _, bot := range excluded {
+		versions, err := c.ListVersions(ctx, bot.ID)
+		if err != nil {
+			return fmt.Errorf("verify Arena competition exclusions: list versions for %q: %w", bot.Name, err)
+		}
+		for _, version := range versions {
+			if _, selected := unknown[version.ID]; selected {
+				reason, _ := LocalExclusionReason(bot.Name)
+				return fmt.Errorf("Arena competition rejected: bot %q: %s", bot.Name, reason)
+			}
+		}
+	}
+	return nil
 }
 
 // ProgressMatch is one match's live position.

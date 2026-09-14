@@ -1,6 +1,9 @@
 package arena
 
 import (
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -98,5 +101,156 @@ func TestCompetitionDone(t *testing.T) {
 		if (Competition{State: state}).Done() {
 			t.Errorf("%s should not be terminal", state)
 		}
+	}
+}
+
+func TestCreateCompetitionRejectsExcludedLatestVersionBeforePOST(t *testing.T) {
+	posts := 0
+	historyRequests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/bots":
+			_, _ = io.WriteString(w, `[{"id":"paul","name":"Paul-Sauron-301","latestVersion":{"id":"paul-latest"}},{"id":"good","name":"Gandalf","latestVersion":{"id":"good-latest"}}]`)
+		case r.Method == http.MethodGet:
+			historyRequests++
+			http.Error(w, "unexpected history request", http.StatusInternalServerError)
+		case r.Method == http.MethodPost:
+			posts++
+			_, _ = io.WriteString(w, `{"id":"created"}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	_, err := New(server.URL, "key").CreateCompetition(t.Context(), competitionConfig("paul-latest", "good-latest"))
+	if err == nil || !strings.Contains(err.Error(), "Paul-Sauron-301") {
+		t.Fatalf("expected local exclusion error, got %v", err)
+	}
+	if posts != 0 || historyRequests != 0 {
+		t.Fatalf("posts = %d, history requests = %d; want both zero", posts, historyRequests)
+	}
+}
+
+func TestCreateCompetitionRejectsExcludedHistoricalVersionBeforePOST(t *testing.T) {
+	posts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/bots":
+			_, _ = io.WriteString(w, `[{"id":"paul","name":" paul-sauron-old ","latestVersion":{"id":"paul-latest"}},{"id":"good","name":"Gandalf","latestVersion":{"id":"good-latest"}}]`)
+		case r.Method == http.MethodGet && r.URL.Path == "/api/bots/paul/versions":
+			_, _ = io.WriteString(w, `[{"id":"paul-old"},{"id":"paul-latest"}]`)
+		case r.Method == http.MethodPost:
+			posts++
+			_, _ = io.WriteString(w, `{"id":"created"}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	_, err := New(server.URL, "key").CreateCompetition(t.Context(), competitionConfig("paul-old", "good-latest"))
+	if err == nil || !strings.Contains(err.Error(), "paul-sauron-old") {
+		t.Fatalf("expected historical version exclusion error, got %v", err)
+	}
+	if posts != 0 {
+		t.Fatalf("competition POST count = %d, want 0", posts)
+	}
+}
+
+func TestCreateCompetitionPostsAllowedRoster(t *testing.T) {
+	posts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/bots":
+			_, _ = io.WriteString(w, `[{"id":"one","name":"Gandalf","latestVersion":{"id":"v1"}},{"id":"two","name":"Paul-Atreides","latestVersion":{"id":"v2"}}]`)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/competitions":
+			posts++
+			_, _ = io.WriteString(w, `{"id":"created"}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	created, err := New(server.URL, "key").CreateCompetition(t.Context(), competitionConfig("v1", "v2"))
+	if err != nil {
+		t.Fatalf("allowed competition rejected: %v", err)
+	}
+	if created.ID != "created" || posts != 1 {
+		t.Fatalf("created = %#v, posts = %d", created, posts)
+	}
+}
+
+func TestCreateCompetitionAllowsUnknownVersionAfterExcludedHistoriesChecked(t *testing.T) {
+	posts := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/bots":
+			_, _ = io.WriteString(w, `[{"id":"paul","name":"Paul-Sauron","latestVersion":{"id":"paul-latest"}},{"id":"good","name":"Gandalf","latestVersion":{"id":"good-latest"}}]`)
+		case r.Method == http.MethodGet && r.URL.Path == "/api/bots/paul/versions":
+			_, _ = io.WriteString(w, `[{"id":"paul-old"},{"id":"paul-latest"}]`)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/competitions":
+			posts++
+			_, _ = io.WriteString(w, `{"id":"created"}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	_, err := New(server.URL, "key").CreateCompetition(t.Context(), competitionConfig("allowed-old", "good-latest"))
+	if err != nil {
+		t.Fatalf("old allowed version rejected: %v", err)
+	}
+	if posts != 1 {
+		t.Fatalf("competition POST count = %d, want 1", posts)
+	}
+}
+
+func TestCreateCompetitionLookupFailuresPreventPOST(t *testing.T) {
+	tests := []struct {
+		name       string
+		botsStatus int
+	}{
+		{"roster lookup", http.StatusServiceUnavailable},
+		{"excluded history lookup", http.StatusOK},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			posts := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case r.Method == http.MethodGet && r.URL.Path == "/api/bots" && test.botsStatus != http.StatusOK:
+					http.Error(w, "roster unavailable", test.botsStatus)
+				case r.Method == http.MethodGet && r.URL.Path == "/api/bots":
+					_, _ = io.WriteString(w, `[{"id":"paul","name":"Paul-Sauron","latestVersion":{"id":"paul-latest"}},{"id":"good","name":"Gandalf","latestVersion":{"id":"good-latest"}}]`)
+				case r.Method == http.MethodGet && r.URL.Path == "/api/bots/paul/versions":
+					http.Error(w, "history unavailable", http.StatusBadGateway)
+				case r.Method == http.MethodPost:
+					posts++
+					_, _ = io.WriteString(w, `{"id":"created"}`)
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+			defer server.Close()
+
+			_, err := New(server.URL, "key").CreateCompetition(t.Context(), competitionConfig("unknown-old", "good-latest"))
+			if err == nil || !strings.Contains(err.Error(), "verify Arena competition exclusions") {
+				t.Fatalf("expected exclusion verification error, got %v", err)
+			}
+			if posts != 0 {
+				t.Fatalf("competition POST count = %d, want 0", posts)
+			}
+		})
+	}
+}
+
+func competitionConfig(players ...string) CompetitionConfig {
+	return CompetitionConfig{
+		Game: "27td-fl", Players: players, Hands: 100,
+		CPUCores: 1, DecisionTimeoutMs: 1000,
 	}
 }

@@ -55,10 +55,15 @@ func runBots(ctx context.Context, client *arena.Client, args []string) error {
 
 	table := newTable()
 	fmt.Fprintln(table, "NAME\tSTATE\tGAMES\tSEATS\tSIZE\tDIGEST\tBOT ID")
+	showedExclusion := false
 	for _, bot := range bots {
 		name := bot.Name
 		if bot.System {
 			name += " *"
+		}
+		if _, excluded := arena.LocalExclusionReason(bot.Name); excluded {
+			name += " [local exclusion]"
+			showedExclusion = true
 		}
 		games, seats, size, digest := "—", "—", "—", "—"
 		if version := bot.LatestVersion; version != nil {
@@ -75,6 +80,9 @@ func runBots(ctx context.Context, client *arena.Client, args []string) error {
 	}
 	if *all {
 		fmt.Println("\n* system baseline")
+	}
+	if showedExclusion {
+		fmt.Println("[local exclusion] paul-sauron bot family is locally excluded as malfunctioning; server state is unchanged")
 	}
 	return nil
 }

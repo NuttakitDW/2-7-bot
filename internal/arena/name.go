@@ -65,7 +65,7 @@ var retiredNames = map[string]bool{
 
 // BotName is a parsed bot name: nutt-<game>-<seats>-<lineage><gen>[-<qualifier>]...
 type BotName struct {
-	Owner      string   // always BotNameOwner
+	Owner      string   // BotNameOwner in the full grammar; the codename in the short grammar
 	Game       string   // a registry game id, e.g. "27td-fl" — may contain hyphens
 	Seats      string   // hu | 6max | hu6 | all
 	Lineage    byte     // h heuristic | b blueprint | x experiment
@@ -87,6 +87,10 @@ func ParseBotName(name string) (BotName, error) {
 	}
 	if retiredNames[name] {
 		return BotName{}, fmt.Errorf("bot name %q is retired; a new build takes a new name (see docs/naming.md)", name)
+	}
+	if strings.HasPrefix(name, LegacyCodenamePrefix) {
+		return BotName{}, fmt.Errorf("bot name %q uses the retired %q prefix; migrate it to %q (for example, %q)",
+			name, LegacyCodenamePrefix, CodenamePrefix, strings.Replace(name, LegacyCodenamePrefix, CodenamePrefix, 1))
 	}
 
 	segments := strings.Split(name, "-")
@@ -153,31 +157,39 @@ func (n BotName) NextGen() BotName {
 // String rebuilds the name, so a parse round-trips.
 func (n BotName) String() string {
 	if n.Owner != BotNameOwner {
-		return fmt.Sprintf("%s%s-%d", CodenamePrefix, n.Owner, n.Generation)
+		if n.Seats == CodenameSeats {
+			return fmt.Sprintf("%s%s-%d", CodenamePrefix, n.Owner, n.Generation)
+		}
+		return fmt.Sprintf("%s%s-%s-%d", CodenamePrefix, n.Owner, n.Seats, n.Generation)
 	}
 	segments := []string{n.Owner, n.Game, n.Seats, fmt.Sprintf("%c%d", n.Lineage, n.Generation)}
 	return strings.Join(append(segments, n.Qualifiers...), "-")
 }
 
-// The codename grammar: 2-7-<codename>-<gen>, heads-up 27td-fl only.
+// The codename grammar is 27-<codename>-<gen> for heads-up, or
+// 27-<codename>-<seats>-<gen> when the artifact declares another seat set.
 //
 // A codename is one lowercase word naming a strategy family; the generation
 // counts raceable builds within it. Owner carries the codename, since the
-// roster shows no account prefix for these names. Reserved codenames are the
-// agents that build bots — a bot is never named after its author.
+// roster shows no account prefix for these names. Reserved codenames keep the
+// two grammars distinct and exclude names used by the agents that build bots.
 const (
-	CodenamePrefix = "2-7-"
-	CodenameGame   = "27td-fl"
-	CodenameSeats  = "hu"
+	CodenamePrefix       = "27-"
+	LegacyCodenamePrefix = "2-7-"
+	CodenameGame         = "27td-fl"
+	CodenameSeats        = "hu"
 )
 
-var reservedCodenames = map[string]bool{"fable": true}
+// "nutt" is reserved because BotName.Owner distinguishes the full grammar's
+// fixed owner from a short name's codename when String rebuilds the name.
+var reservedCodenames = map[string]bool{"fable": true, BotNameOwner: true}
 
 func parseCodename(name string, segments []string) (BotName, error) {
-	if len(segments) != 4 {
-		return BotName{}, fmt.Errorf("bot name %q must be %s<codename>-<generation>", name, CodenamePrefix)
+	if len(segments) != 3 && len(segments) != 4 {
+		return BotName{}, fmt.Errorf("bot name %q must be %s<codename>-<generation> or %s<codename>-<seats>-<generation>",
+			name, CodenamePrefix, CodenamePrefix)
 	}
-	codename := segments[2]
+	codename := segments[1]
 	for i := 0; i < len(codename); i++ {
 		if codename[i] < 'a' || codename[i] > 'z' {
 			return BotName{}, fmt.Errorf("codename %q must be lowercase letters only", codename)
@@ -186,14 +198,28 @@ func parseCodename(name string, segments []string) (BotName, error) {
 	if reservedCodenames[codename] {
 		return BotName{}, fmt.Errorf("codename %q is reserved", codename)
 	}
-	_, generation, err := parseLineage("h" + segments[3])
+	seats := CodenameSeats
+	generationAt := 2
+	if len(segments) == 4 {
+		seats = segments[2]
+		generationAt = 3
+		if _, ok := seatCounts[seats]; !ok {
+			return BotName{}, fmt.Errorf("bot name %q has unknown seat token %q (%s)",
+				name, seats, strings.Join(seatTokens, ", "))
+		}
+		if seats == CodenameSeats {
+			return BotName{}, fmt.Errorf("bot name %q must omit the default %q seat token; use %s%s-%s",
+				name, CodenameSeats, CodenamePrefix, codename, segments[generationAt])
+		}
+	}
+	_, generation, err := parseLineage("h" + segments[generationAt])
 	if err != nil {
 		return BotName{}, fmt.Errorf("bot name %q: %w", name, err)
 	}
 	return BotName{
 		Owner:      codename,
 		Game:       CodenameGame,
-		Seats:      CodenameSeats,
+		Seats:      seats,
 		Lineage:    LineageBlueprint,
 		Generation: generation,
 	}, nil

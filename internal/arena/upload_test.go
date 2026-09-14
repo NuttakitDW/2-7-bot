@@ -40,7 +40,7 @@ func TestPlanChunks(t *testing.T) {
 }
 
 func TestUploadRequestValidate(t *testing.T) {
-	valid := UploadRequest{Name: "nutt-27td-fl-hu-h1", Games: []string{"27td-fl"}, PlayerCounts: []int{2}, Size: 100}
+	valid := UploadRequest{Name: "27-spinel-6max-1", Games: []string{"27td-fl"}, PlayerCounts: []int{6}, Size: 100}
 	if err := valid.Validate(); err != nil {
 		t.Fatalf("valid request rejected: %v", err)
 	}
@@ -59,6 +59,7 @@ func TestUploadRequestValidate(t *testing.T) {
 		{"over limit", func(r *UploadRequest) { r.Size = MaxArtifactBytes + 1 }, "over the 300 MiB limit"},
 		{"retired name", func(r *UploadRequest) { r.Name = "nutt-27td-fl" }, "retired"},
 		{"another owner", func(r *UploadRequest) { r.Name = "swit-27td-fl-hu-h1" }, `must start with "nutt-"`},
+		{"legacy codename prefix", func(r *UploadRequest) { r.Name = "2-7-spinel-1" }, `migrate it to "27-"`},
 		{"two games", func(r *UploadRequest) { r.Games = []string{"27td-fl", "badugi-fl"} }, "exactly one game"},
 		{"game contradicts the name", func(r *UploadRequest) { r.Games = []string{"badugi-fl"} }, "names game \"27td-fl\""},
 		{"counts contradict the name", func(r *UploadRequest) { r.PlayerCounts = []int{2, 6} }, `that seat set is named "hu6"`},
