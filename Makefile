@@ -261,3 +261,41 @@ upload-spinel-6max-dry-run: arena bot-spinel-release
 	  --counts 6 \
 	  --file bin/$(SPINEL_BOT_NAME) \
 	  --dry-run
+
+# Zircon is a native six-seat strategy with no heads-up model assets.
+ZIRCON_BOT_NAME ?= 27-zircon-6max-2
+ZIRCON_NATIVE_PATH ?= bin/bot-zircon
+ZIRCON_PROFILE ?= generation2
+ZIRCON_LDFLAGS = -X main.botProfile=$(ZIRCON_PROFILE)
+
+.PHONY: bot-zircon bot-zircon-baseline bot-zircon-release spar-zircon-6max
+
+bot-zircon:
+	@mkdir -p bin
+	go build -ldflags='$(ZIRCON_LDFLAGS)' -o $(ZIRCON_NATIVE_PATH) ./cmd/zircon
+
+bot-zircon-baseline:
+	@mkdir -p bin
+	go build -ldflags='-X main.botProfile=baseline' -o bin/bot-zircon-v1 ./cmd/zircon
+
+bot-zircon-release:
+	@mkdir -p bin
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+	  go build -trimpath -ldflags='-s -w $(ZIRCON_LDFLAGS)' -o bin/$(ZIRCON_BOT_NAME) ./cmd/zircon
+
+# Duplicate dealing rotates Zircon through all six seats: HANDS decks produce
+# 6*HANDS total hands.
+spar-zircon-6max: engine bot-zircon
+	$(ENGINE_BIN) run \
+	  --game $(GAME) \
+	  --hands $(HANDS) \
+	  --dealing duplicate \
+	  --bot 'zircon@cmd:$(ZIRCON_NATIVE_PATH)' \
+	  --bot 'random-1@builtin:random:1' \
+	  --bot 'random-2@builtin:random:2' \
+	  --bot 'random-3@builtin:random:3' \
+	  --bot 'random-4@builtin:random:4' \
+	  --bot 'random-5@builtin:random:5' \
+	  --timeout-ms 1000 \
+	  --fault-policy forfeit \
+	  --output json
