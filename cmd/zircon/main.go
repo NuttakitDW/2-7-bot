@@ -12,7 +12,7 @@ import (
 	"github.com/nuttakit/2-7-bot/internal/zircon"
 )
 
-var botProfile = "generation2"
+var botProfile = "generation3"
 
 func main() {
 	debug := io.Discard
@@ -82,6 +82,8 @@ func configuredBot() (*zircon.Bot, error) {
 		return zircon.NewBaseline(), nil
 	case "generation2":
 		return zircon.NewGeneration2(), nil
+	case "generation3":
+		return zircon.NewGeneration3(), nil
 	default:
 		return nil, fmt.Errorf("unknown zircon profile %q", botProfile)
 	}

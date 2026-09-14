@@ -74,6 +74,18 @@ func cleanFourCardEight(keep []cards.Rank) bool {
 	return true
 }
 
+func cleanFourCardNine(keep []cards.Rank) bool {
+	if len(keep) != 4 || keep[3] > cards.Nine {
+		return false
+	}
+	for i := 1; i < len(keep); i++ {
+		if keep[i] <= keep[i-1] {
+			return false
+		}
+	}
+	return true
+}
+
 func (s *State) AllLiveDrewAtLeastCurrent(minimum int) bool {
 	draws, ok := s.CurrentLiveDraws()
 	if !ok || len(draws) == 0 {

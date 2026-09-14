@@ -17,6 +17,7 @@ type Profile uint8
 const (
 	Baseline Profile = iota
 	Generation2
+	Generation3
 )
 
 type OverrideStats struct {
@@ -34,6 +35,7 @@ func cloneModel() *sixmaxclone.Model {
 
 func NewBaseline() *Bot    { return newBot(Baseline, nil) }
 func NewGeneration2() *Bot { return newBot(Generation2, cloneModel()) }
+func NewGeneration3() *Bot { return newBot(Generation3, cloneModel()) }
 
 func newBot(profile Profile, model *sixmaxclone.Model) *Bot {
 	return &Bot{State: NewState(), profile: profile, clone: model}
@@ -43,7 +45,7 @@ func (b *Bot) OverrideStats() OverrideStats { return b.overrideStats }
 
 func (b *Bot) clonePredraw(d wire.Decision, baseline wire.Action) (wire.Action, bool) {
 	h := &b.State.Hand
-	if b.profile != Generation2 || b.clone == nil || h.Street != Predraw || d.Kind != wire.DecisionWager ||
+	if (b.profile != Generation2 && b.profile != Generation3) || b.clone == nil || h.Street != Predraw || d.Kind != wire.DecisionWager ||
 		d.Call == nil || *d.Call == 0 || h.StreetAggressions < 1 || !h.Complete() || b.State.HasAllIn() || h.SidePot ||
 		!validSeat(h.Hero) || h.Category() >= deuce.Eight {
 		return wire.Action{}, false

@@ -328,3 +328,57 @@ func TestPendingShortCallUsesOnlyContestablePot(t *testing.T) {
 		t.Fatal("short call priced against chips hero cannot contest")
 	}
 }
+
+func TestOneCardNineDrawContinuesAgainstSingleBetWithoutPatPressure(t *testing.T) {
+	b := strategyBot(0, "2c", "4d", "6h", "9s", "Kc")
+	b.State.Hand.Street = Draw1
+	b.State.Hand.Pot = 800
+	b.State.Hand.StreetAggressions = 1
+	for seat := 2; seat < SeatCount; seat++ {
+		b.State.Hand.Seats[seat].Folded = true
+	}
+	b.State.Hand.Seats[0].Contribution = 300
+	b.State.Hand.Seats[1].Contribution = 400
+	b.State.Hand.Seats[1].Draws[Draw1] = 2 // opponent drew 2
+	if got := b.Decide(faceDecision(100, false)).Kind; got != wire.ActionCall {
+		t.Fatalf("nine draw call=%s, want call", got)
+	}
+}
+
+func TestRiverHeadsUpRoughEightCallsSingleRaiseAgainstDrawingOpponent(t *testing.T) {
+	b := strategyBot(0, "3c", "4d", "5h", "7s", "8c")
+	b.State.Hand.Street = Draw3
+	b.State.Hand.Pot = 1500
+	b.State.Hand.StreetAggressions = 2 // hero bet, opponent raised
+	for seat := 2; seat < SeatCount; seat++ {
+		b.State.Hand.Seats[seat].Folded = true
+	}
+	b.State.Hand.Seats[0].Contribution = 700
+	b.State.Hand.Seats[1].Contribution = 800
+	b.State.Hand.Seats[1].Draws[Draw3] = 1 // opponent drew on river
+	b.State.Hand.Seats[1].ActedOnStreet = true
+	if got := b.Decide(faceDecision(100, false)).Kind; got != wire.ActionCall {
+		t.Fatalf("heads-up rough eight vs drawing opponent call=%s, want call", got)
+	}
+}
+
+func TestRiverEightFoldsWhenMultiplePatOpponentsRaise(t *testing.T) {
+	b := strategyBot(0, "2c", "4d", "5h", "6s", "8c")
+	b.State.Hand.Street = Draw3
+	b.State.Hand.StreetAggressions = 2
+	for seat := 3; seat < SeatCount; seat++ {
+		b.State.Hand.Seats[seat].Folded = true
+	}
+	b.State.Hand.Seats[1].Draws[Draw3] = 0 // pat
+	b.State.Hand.Seats[2].Draws[Draw3] = 0 // pat
+	if got := b.Decide(faceDecision(100, false)).Kind; got != wire.ActionFold {
+		t.Fatalf("eight vs two pat opponents raising=%s, want fold", got)
+	}
+}
+
+func TestLateTwoCardDrawRejectsJunkNineDraws(t *testing.T) {
+	junk := strategyBot(5, "6c", "8d", "9s", "Qs", "Kc") // cutoff
+	if got := junk.Decide(openDecision()).Kind; got != wire.ActionCheck {
+		t.Fatalf("junk 6-8-9 open=%s, want check/fold", got)
+	}
+}

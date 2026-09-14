@@ -57,7 +57,7 @@ func classifyStart(hand []cards.Card) startQuality {
 	q.strong1 = draw == 1 && len(keep) == 4 && keep[3] <= cards.Eight
 	q.clean1 = draw == 1 && len(keep) == 4 && keep[3] <= cards.Eight
 	q.strong2 = draw == 2 && len(keep) == 3 && keep[0] == cards.Two
-	q.late2 = draw == 2 && len(keep) == 3
+	q.late2 = draw == 2 && len(keep) == 3 && (keep[0] == cards.Two || keep[2] <= cards.Eight)
 	return q
 }
 
@@ -225,11 +225,13 @@ func (b *Bot) postdraw(d wire.Decision) wire.Action {
 		if h.StreetAggressions == 2 {
 			denominator += 1
 		}
-		if freshPat <= 1 && cleanFourCardEight(policy.DrawingKeep(h.Cards)) && b.affordable(d.Call, denominator) {
+		keep := policy.DrawingKeep(h.Cards)
+		canDraw := (freshPat <= 1 && cleanFourCardEight(keep)) || (freshPat == 0 && cleanFourCardNine(keep))
+		if canDraw && b.affordable(d.Call, denominator) {
 			return wire.Call()
 		}
 	}
-	if draws == 2 && h.Street == Draw1 && h.StreetAggressions <= 1 && b.affordable(d.Call, 7) {
+	if draws == 2 && h.Street == Draw1 && h.StreetAggressions <= 1 && b.affordable(d.Call, 5) {
 		return wire.Call()
 	}
 	return wire.Fold()
@@ -276,10 +278,16 @@ func (b *Bot) river(d wire.Decision) wire.Action {
 		}
 		return wire.Call()
 	case deuce.Eight:
+		if (freshPat >= 2 || stalePat >= 2 || (freshPat >= 1 && stalePat >= 1)) && h.StreetAggressions >= 2 {
+			return wire.Fold()
+		}
 		if live >= 3 && (freshPat >= 2 || strongAction) && !smoothEight(h.Cards) {
 			return wire.Fold()
 		}
-		if h.StreetAggressions >= 2 && !smoothEight(h.Cards) {
+		if live >= 2 && h.StreetAggressions >= 2 && (freshPat >= 1 || stalePat >= 1) && !smoothEight(h.Cards) {
+			return wire.Fold()
+		}
+		if h.StreetAggressions >= 3 && !smoothEight(h.Cards) {
 			return wire.Fold()
 		}
 		return wire.Call()

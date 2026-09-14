@@ -263,9 +263,9 @@ upload-spinel-6max-dry-run: arena bot-spinel-release
 	  --dry-run
 
 # Zircon is a native six-seat strategy with no heads-up model assets.
-ZIRCON_BOT_NAME ?= 27-zircon-6max-2
+ZIRCON_BOT_NAME ?= 27-zircon-6max-3
 ZIRCON_NATIVE_PATH ?= bin/bot-zircon
-ZIRCON_PROFILE ?= generation2
+ZIRCON_PROFILE ?= generation3
 ZIRCON_LDFLAGS = -X main.botProfile=$(ZIRCON_PROFILE)
 
 .PHONY: bot-zircon bot-zircon-baseline bot-zircon-release spar-zircon-6max
