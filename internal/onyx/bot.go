@@ -25,6 +25,7 @@ type Bot struct {
 	strongPat       bool
 	opponentActions uint64
 	opponentRaises  uint64
+	random          func() float64
 }
 
 // NewModeled enables public-history tracking and the embedded acting-player
@@ -90,6 +91,18 @@ func New() (*Bot, error) {
 			return nil, err
 		}
 	}
+	return b, nil
+}
+
+// NewSeeded preserves the default policy while giving offline simulations a
+// reproducible private mixing stream. Runtime bots continue to use rand.Float64.
+func NewSeeded(seed uint64) (*Bot, error) {
+	b, err := New()
+	if err != nil {
+		return nil, err
+	}
+	rng := rand.New(rand.NewPCG(seed, seed^0x9E3779B97F4A7C15))
+	b.random = rng.Float64
 	return b, nil
 }
 func (b *Bot) Hello(m wire.Message) {
@@ -174,7 +187,11 @@ func (b *Bot) Decide(d wire.Decision) wire.Action {
 	if b.opponentActions >= 64 && b.opponentRaises*4 > b.opponentActions*3 {
 		return policy.Decide(b.Table, d)
 	}
-	return wire.Legalize(d, b.propose(d, rand.Float64()), b.Table.Hand.Cards)
+	mix := rand.Float64()
+	if b.random != nil {
+		mix = b.random()
+	}
+	return wire.Legalize(d, b.propose(d, mix), b.Table.Hand.Cards)
 }
 
 func (b *Bot) propose(d wire.Decision, mix float64) wire.Action {

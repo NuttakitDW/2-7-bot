@@ -57,6 +57,16 @@ func TestRunStopsAtMatchEnd(t *testing.T) {
 	}
 }
 
+func TestRunCanEmitOnlyMatchSummary(t *testing.T) {
+	var replies, summary bytes.Buffer
+	if err := runWithSummary(strings.NewReader(`{"t":"match-end"}`), &replies, io.Discard, &summary); err != nil {
+		t.Fatal(err)
+	}
+	if got := summary.String(); got != "match end, 0 blueprint fallbacks\n" {
+		t.Fatalf("summary=%q", got)
+	}
+}
+
 // A closed pipe is the other way a match ends: the arena went away, and there
 // is nothing to complain about.
 func TestRunExitsCleanlyOnEOF(t *testing.T) {

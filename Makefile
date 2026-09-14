@@ -20,6 +20,8 @@ ONYX_LDFLAGS = -X github.com/nuttakit/2-7-bot/internal/onyx.predrawProfile=$(ONY
 
 .PHONY: help arena bot bot-release bot-model-release bot-model test fmt vet docs-check engine spar
 .PHONY: spar-spinel-6max upload-spinel-6max-dry-run
+.PHONY: bot-beryl bot-beryl-release spar-beryl-6max upload-beryl-6max-dry-run
+.PHONY: garnet-rank garnet-train test-garnet-profile bot-garnet bot-garnet-release spar-garnet-6max upload-garnet-6max-dry-run
 
 help:
 	@echo 'arena       build the harness CLI into bin/arena'
@@ -33,6 +35,9 @@ help:
 	@echo 'spar        run BOT against builtin:random locally'
 	@echo 'spar-spinel-6max run Spinel at every seat over 6 x HANDS hands'
 	@echo 'upload-spinel-6max-dry-run validate the six-max upload offline'
+	@echo 'garnet-rank/train generate Garnet EV ranking and predraw CFR policy'
+	@echo 'bot-garnet[-release] build Garnet with generated assets'
+	@echo 'test-garnet-profile validate the real three-asset Garnet overlay'
 
 arena:
 	go build -o bin/arena ./cmd/arena
@@ -236,6 +241,149 @@ bot-spinel-release:
 	  $(AZURITE_OVERLAY) "$$overlay" "$(SPINEL_POLICY)" && \
 	  CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -overlay "$$overlay" \
 	    -ldflags='-s -w $(SPINEL_LDFLAGS)' -o bin/$(SPINEL_BOT_NAME) ./cmd/bot
+
+BERYL_BOT_NAME ?= 27-beryl-6max-1
+BERYL_NATIVE_PATH ?= bin/bot-beryl-6max
+BERYL_LDFLAGS = -X main.playerProfile=beryl \
+	-X github.com/nuttakit/2-7-bot/internal/lapis.Greedy=$(TOURMALINE_GREEDY) \
+	-X github.com/nuttakit/2-7-bot/internal/lapis.ResponseMinVisits=$(TOURMALINE_MIN_VISITS) \
+	-X github.com/nuttakit/2-7-bot/internal/lapis.BlockerParticles=$(SPINEL_PARTICLES)
+
+bot-beryl:
+	@test -f "$(SPINEL_POLICY)"
+	@mkdir -p bin
+	@overlay=$$(mktemp "$$(pwd)/bin/beryl-overlay.XXXXXX"); \
+	  trap 'rm -f "$$overlay"' EXIT; \
+	  $(AZURITE_OVERLAY) "$$overlay" "$(SPINEL_POLICY)" && \
+	  go build -overlay "$$overlay" -ldflags='$(BERYL_LDFLAGS)' -o $(BERYL_NATIVE_PATH) ./cmd/bot
+
+bot-beryl-release:
+	@test -f "$(SPINEL_POLICY)"
+	@mkdir -p bin
+	@overlay=$$(mktemp "$$(pwd)/bin/beryl-overlay.XXXXXX"); \
+	  trap 'rm -f "$$overlay"' EXIT; \
+	  $(AZURITE_OVERLAY) "$$overlay" "$(SPINEL_POLICY)" && \
+	  CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -overlay "$$overlay" \
+	    -ldflags='-s -w $(BERYL_LDFLAGS)' -o bin/$(BERYL_BOT_NAME) ./cmd/bot
+
+spar-beryl-6max: engine bot-beryl
+	$(ENGINE_BIN) run \
+	  --game $(GAME) \
+	  --hands $(HANDS) \
+	  --dealing duplicate \
+	  --bot 'beryl@cmd:$(BERYL_NATIVE_PATH)' \
+	  --bot 'random-1@builtin:random:1' \
+	  --bot 'random-2@builtin:random:2' \
+	  --bot 'random-3@builtin:random:3' \
+	  --bot 'random-4@builtin:random:4' \
+	  --bot 'random-5@builtin:random:5' \
+	  --timeout-ms 1000 \
+	  --fault-policy forfeit \
+	  --output json
+
+upload-beryl-6max-dry-run: arena bot-beryl-release
+	API_KEY=offline-dry-run ./bin/arena upload \
+	  --games $(GAME) \
+	  --counts 6 \
+	  --file bin/$(BERYL_BOT_NAME) \
+	  --dry-run
+
+GARNET_RANKING ?= bin/garnet/ranking.json
+GARNET_POLICY ?= bin/garnet/policy.json
+GARNET_RANK_SAMPLES_PER_POSITION ?= 64
+GARNET_RANK_WORKERS ?= 8
+GARNET_RANK_SEED ?= 27091401
+GARNET_TRAIN_ITERS ?= 10000
+GARNET_TRAIN_SEED ?= 27091402
+GARNET_BUCKETS ?= 16
+GARNET_SCALE ?= 1
+GARNET_BOT_NAME ?= 27-garnet-6max-1
+GARNET_NATIVE_PATH ?= bin/bot-garnet-6max
+GARNET_OVERLAY = python3 -c 'import json,pathlib,sys; r=pathlib.Path.cwd(); paths=["internal/lapis/blueprint.bin.gz","internal/garnet/ranking.json","internal/garnet/policy.json"]; pathlib.Path(sys.argv[1]).write_text(json.dumps({"Replace":{str(r/p):str(pathlib.Path(v).resolve()) for p,v in zip(paths,sys.argv[2:])}}))'
+GARNET_LDFLAGS = -X main.playerProfile=garnet \
+	-X github.com/nuttakit/2-7-bot/internal/lapis.Greedy=$(TOURMALINE_GREEDY) \
+	-X github.com/nuttakit/2-7-bot/internal/lapis.ResponseMinVisits=$(TOURMALINE_MIN_VISITS) \
+	-X github.com/nuttakit/2-7-bot/internal/lapis.BlockerParticles=$(SPINEL_PARTICLES)
+
+garnet-rank:
+	@test -f "$(SPINEL_POLICY)"
+	@mkdir -p "$$(dirname "$(GARNET_RANKING)")" bin
+	@overlay=$$(mktemp "$$(pwd)/bin/garnet-rank-overlay.XXXXXX"); \
+	  trap 'rm -f "$$overlay"' EXIT; \
+	  reference_hash=$$(shasum -a 256 "$(SPINEL_POLICY)" | cut -d' ' -f1); \
+	  code_hash=$$(python3 -c 'import hashlib,pathlib; root=pathlib.Path.cwd(); files=sorted(p for d in ("internal/beryl","internal/onyx","internal/lapis") for p in (root/d).glob("*.go")); h=hashlib.sha256(); [h.update(str(p.relative_to(root)).encode()+b"\0"+p.read_bytes()) for p in files]; print(h.hexdigest())'); \
+	  $(AZURITE_OVERLAY) "$$overlay" "$(SPINEL_POLICY)" && \
+	  go run -overlay "$$overlay" ./cmd/garnetgen rank \
+	    -out "$(GARNET_RANKING)" -seed $(GARNET_RANK_SEED) \
+	    -samples-per-position $(GARNET_RANK_SAMPLES_PER_POSITION) \
+	    -workers $(GARNET_RANK_WORKERS) \
+	    -reference-hash "$$reference_hash" -reference-code-hash "$$code_hash"
+
+garnet-train:
+	@test -f "$(SPINEL_POLICY)"
+	@test -f "$(GARNET_RANKING)"
+	@mkdir -p "$$(dirname "$(GARNET_POLICY)")" bin
+	@overlay=$$(mktemp "$$(pwd)/bin/garnet-train-overlay.XXXXXX"); \
+	  trap 'rm -f "$$overlay"' EXIT; \
+	  $(AZURITE_OVERLAY) "$$overlay" "$(SPINEL_POLICY)" && \
+	  go run -overlay "$$overlay" ./cmd/garnetgen train \
+	    -ranking "$(GARNET_RANKING)" -out "$(GARNET_POLICY)" \
+	    -iters $(GARNET_TRAIN_ITERS) -buckets $(GARNET_BUCKETS) \
+	    -seed $(GARNET_TRAIN_SEED) -scale $(GARNET_SCALE)
+
+test-garnet-profile:
+	@test -f "$(SPINEL_POLICY)"
+	@test -f "$(GARNET_RANKING)"
+	@test -f "$(GARNET_POLICY)"
+	@mkdir -p bin
+	@overlay=$$(mktemp "$$(pwd)/bin/garnet-test-overlay.XXXXXX"); \
+	  trap 'rm -f "$$overlay"' EXIT; \
+	  $(GARNET_OVERLAY) "$$overlay" "$(SPINEL_POLICY)" "$(GARNET_RANKING)" "$(GARNET_POLICY)" && \
+	  GARNET_PROFILE_TEST=1 go test -overlay "$$overlay" ./internal/garnet && \
+	  GARNET_PROFILE_TEST=1 go test -overlay "$$overlay" -run '^TestGarnet' ./cmd/bot
+
+bot-garnet:
+	@test -f "$(SPINEL_POLICY)"
+	@test -f "$(GARNET_RANKING)"
+	@test -f "$(GARNET_POLICY)"
+	@mkdir -p bin
+	@overlay=$$(mktemp "$$(pwd)/bin/garnet-overlay.XXXXXX"); \
+	  trap 'rm -f "$$overlay"' EXIT; \
+	  $(GARNET_OVERLAY) "$$overlay" "$(SPINEL_POLICY)" "$(GARNET_RANKING)" "$(GARNET_POLICY)" && \
+	  go build -overlay "$$overlay" -ldflags='$(GARNET_LDFLAGS)' -o $(GARNET_NATIVE_PATH) ./cmd/bot
+
+bot-garnet-release:
+	@test -f "$(SPINEL_POLICY)"
+	@test -f "$(GARNET_RANKING)"
+	@test -f "$(GARNET_POLICY)"
+	@mkdir -p bin
+	@overlay=$$(mktemp "$$(pwd)/bin/garnet-release-overlay.XXXXXX"); \
+	  trap 'rm -f "$$overlay"' EXIT; \
+	  $(GARNET_OVERLAY) "$$overlay" "$(SPINEL_POLICY)" "$(GARNET_RANKING)" "$(GARNET_POLICY)" && \
+	  CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -overlay "$$overlay" \
+	    -ldflags='-s -w $(GARNET_LDFLAGS)' -o bin/$(GARNET_BOT_NAME) ./cmd/bot
+
+spar-garnet-6max: engine bot-garnet
+	$(ENGINE_BIN) run \
+	  --game $(GAME) \
+	  --hands $(HANDS) \
+	  --dealing duplicate \
+	  --bot 'garnet@cmd:$(GARNET_NATIVE_PATH)' \
+	  --bot 'random-1@builtin:random:1' \
+	  --bot 'random-2@builtin:random:2' \
+	  --bot 'random-3@builtin:random:3' \
+	  --bot 'random-4@builtin:random:4' \
+	  --bot 'random-5@builtin:random:5' \
+	  --timeout-ms 1000 \
+	  --fault-policy forfeit \
+	  --output json
+
+upload-garnet-6max-dry-run: arena bot-garnet-release
+	API_KEY=offline-dry-run ./bin/arena upload \
+	  --games $(GAME) \
+	  --counts 6 \
+	  --file bin/$(GARNET_BOT_NAME) \
+	  --dry-run
 
 # The learned Spinel tracker is heads-up only today. At six seats it deliberately
 # falls back to the unchanged Onyx strategy; this target tests that supported path.

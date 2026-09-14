@@ -25,13 +25,18 @@ import (
 // debugEnv turns on stderr diagnostics. Off by default: a real match runs
 // hundreds of thousands of hands and a chatty bot is a slow one.
 const debugEnv = "BOT_DEBUG"
+const summaryEnv = "BOT_SUMMARY"
 
 func main() {
 	debug := io.Discard
 	if os.Getenv(debugEnv) != "" {
 		debug = os.Stderr
 	}
-	if err := run(os.Stdin, os.Stdout, debug); err != nil {
+	summary := debug
+	if os.Getenv(summaryEnv) != "" {
+		summary = os.Stderr
+	}
+	if err := runWithSummary(os.Stdin, os.Stdout, debug, summary); err != nil {
 		fmt.Fprintf(os.Stderr, "bot: %v\n", err)
 		os.Exit(1)
 	}
@@ -39,6 +44,10 @@ func main() {
 
 // run reads arena messages until match-end or EOF.
 func run(input io.Reader, output io.Writer, debug io.Writer) error {
+	return runWithSummary(input, output, debug, debug)
+}
+
+func runWithSummary(input io.Reader, output io.Writer, debug, summary io.Writer) error {
 	bot, err := newRuntimeBot()
 	if err != nil {
 		return err
@@ -86,7 +95,7 @@ func run(input io.Reader, output io.Writer, debug io.Writer) error {
 			}
 
 		case wire.MsgMatchEnd:
-			_, _ = fmt.Fprintf(debug, "match end, %d blueprint fallbacks\n", bot.fallbacks())
+			_, _ = fmt.Fprintf(summary, "match end, %s\n", bot.matchSummary())
 			return nil
 
 		default:

@@ -8,7 +8,9 @@
 package lapis
 
 import (
+	"crypto/sha256"
 	_ "embed"
+	"encoding/hex"
 	"fmt"
 	"math/rand/v2"
 	"strconv"
@@ -22,6 +24,17 @@ import (
 
 //go:embed blueprint.bin.gz
 var blueprintData []byte
+
+// EmbeddedPolicyHash identifies the exact policy payload compiled into this
+// process. Composite profiles use it to reject rankings built for another
+// Spinel policy before playing a hand.
+func EmbeddedPolicyHash() (string, error) {
+	if len(blueprintData) == 0 {
+		return "", fmt.Errorf("lapis: empty embedded policy")
+	}
+	digest := sha256.Sum256(blueprintData)
+	return hex.EncodeToString(digest[:]), nil
+}
 
 // Purify is the probability floor below which a blueprint action is
 // dropped before sampling (cfr.Player), and Greedy makes the bot take the
@@ -85,11 +98,23 @@ func NewGreedy() (*Bot, error) {
 // NewModel plays an arbitrary strategy through the same tracker: a fitted
 // opponent model, for sparring against a stand-in on the real engine.
 func NewModel(m cfr.Model) *Bot {
+	return newModelSeeds(m, cfr.BuildTree(), rand.Uint64(), rand.Uint64())
+}
+
+// NewModelSeed plays a shared immutable model with a reproducible sampling
+// stream for offline simulation branches.
+func NewModelSeed(m cfr.Model, seed uint64) *Bot {
+	return newModelSeeds(m, seededModelTree, seed, seed^0xD1B54A32D192ED03)
+}
+
+var seededModelTree = cfr.BuildTree()
+
+func newModelSeeds(m cfr.Model, tree *cfr.Tree, seedA, seedB uint64) *Bot {
 	return &Bot{
 		Table:  table.New(),
-		tree:   cfr.BuildTree(),
+		tree:   tree,
 		player: m,
-		rng:    rand.New(rand.NewPCG(rand.Uint64(), rand.Uint64())),
+		rng:    rand.New(rand.NewPCG(seedA, seedB)),
 		node:   lost,
 	}
 }
@@ -108,6 +133,16 @@ func NewEmpirical() (*Bot, error) {
 // NewRiverResponse loads a fitted base policy with a trained sparse river
 // response, packaged together in the embedded payload.
 func NewRiverResponse() (*Bot, error) {
+	m, err := LoadSpinelModel()
+	if err != nil {
+		return nil, err
+	}
+	return NewModel(m), nil
+}
+
+// LoadSpinelModel decodes the frozen fitted policy once so offline six-seat
+// simulations can share it across deterministic per-seat trackers.
+func LoadSpinelModel() (cfr.Model, error) {
 	tree := cfr.BuildTree()
 	m, err := cfr.DecodeRiverResponse(blueprintData, tree)
 	if err != nil {
@@ -121,7 +156,7 @@ func NewRiverResponse() (*Bot, error) {
 	if err != nil {
 		return nil, fmt.Errorf("lapis: bad response minimum visits %q", ResponseMinVisits)
 	}
-	return NewModel(m), nil
+	return m, nil
 }
 
 // NewBlockerRiverResponse keeps the embedded Tourmaline policy for every
@@ -361,6 +396,35 @@ func (b *Bot) Decide(decision wire.Decision) wire.Action {
 	}
 	return wire.Legalize(decision, action, b.Table.Hand.Cards)
 }
+
+// ProjectedDraw asks this bot's loaded Spinel policy at a valid heads-up draw
+// node selected from a multi-seat public history. Betting fields intentionally
+// stay zero at draw nodes, matching the original tracker.
+func (b *Bot) ProjectedDraw(nodeID int32, seat int, hand []cards.Card, drawn [2]cfr.DrawCounts, lastAggressor int) (wire.Action, bool) {
+	if len(hand) != deuceHandSize || cards.NewSet(hand).Len() != deuceHandSize || nodeID < 0 || int(nodeID) >= len(b.tree.Nodes) {
+		return wire.Action{}, false
+	}
+	node := &b.tree.Nodes[nodeID]
+	if node.Kind != cfr.KindDraw || int(node.Actor) != seat || seat < cfr.Btn || seat > cfr.BB {
+		return wire.Action{}, false
+	}
+	sorted := cards.SortedByRank(hand)
+	view := cfr.View{Seat: seat, Node: nodeID, Street: int(node.Street), Drawn: drawn, LastAggr: lastAggressor, Rand: b.rng.Float64()}
+	copy(view.Hand[:], sorted)
+	keep, ok := b.player.Draw(&view)
+	if !ok || keep&^uint8(31) != 0 {
+		return wire.Action{}, false
+	}
+	discards := make([]cards.Card, 0, deuceHandSize)
+	for i, card := range sorted {
+		if keep&(1<<i) == 0 {
+			discards = append(discards, card)
+		}
+	}
+	return wire.Discard(discards), true
+}
+
+const deuceHandSize = 5
 
 func (b *Bot) propose(decision wire.Decision) (wire.Action, bool) {
 	hand := &b.Table.Hand

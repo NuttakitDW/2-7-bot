@@ -2,9 +2,20 @@ package cfr
 
 // Histories contain only actions strictly before their public tree node.
 // Counts are immutable, shared across model calls, and independent of cards.
-var policyHistories = func() [][Streets][2][3]uint8 {
+// PolicyHistory counts raises/bets, checks, and calls before a public node.
+// It is exported so a multi-seat tracker can project its public action history
+// onto a valid heads-up node used by the fitted policy.
+type PolicyHistory [Streets][2][3]uint8
+
+const (
+	HistoryAggressive = iota
+	HistoryCheck
+	HistoryCall
+)
+
+var policyHistories = func() []PolicyHistory {
 	tree := BuildTree()
-	histories := make([][Streets][2][3]uint8, len(tree.Nodes))
+	histories := make([]PolicyHistory, len(tree.Nodes))
 	var visit func(int32)
 	visit = func(id int32) {
 		n := &tree.Nodes[id]

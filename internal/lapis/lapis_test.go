@@ -1,12 +1,100 @@
 package lapis
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"reflect"
 	"testing"
 
 	"github.com/nuttakit/2-7-bot/internal/cards"
 	"github.com/nuttakit/2-7-bot/internal/cfr"
 	"github.com/nuttakit/2-7-bot/internal/wire"
 )
+
+func TestEmbeddedPolicyHashMatchesPayload(t *testing.T) {
+	want := sha256.Sum256(blueprintData)
+	got, err := EmbeddedPolicyHash()
+	if err != nil || got != hex.EncodeToString(want[:]) {
+		t.Fatalf("hash=%q err=%v", got, err)
+	}
+}
+
+type captureDrawModel struct {
+	view  cfr.View
+	keep  uint8
+	rands []float64
+}
+
+func (m *captureDrawModel) Bet(*cfr.View) (int, bool) { return 0, false }
+func (m *captureDrawModel) Draw(v *cfr.View) (uint8, bool) {
+	m.view = *v
+	m.rands = append(m.rands, v.Rand)
+	return m.keep, true
+}
+
+func TestNewModelSeedHasReproducibleDrawMix(t *testing.T) {
+	aModel, bModel := &captureDrawModel{keep: 31}, &captureDrawModel{keep: 31}
+	a, b := NewModelSeed(aModel, 77), NewModelSeed(bModel, 77)
+	node, _ := cfr.ProjectDrawNode(cfr.Draw1, cfr.Btn, cfr.PolicyHistory{}, -1)
+	hand := cards.MustParse("2c", "3d", "4h", "7s", "Kc")
+	for i := 0; i < 4; i++ {
+		if _, ok := a.ProjectedDraw(node, cfr.Btn, hand, [2]cfr.DrawCounts{}, -1); !ok {
+			t.Fatal("seeded model A rejected draw")
+		}
+		if _, ok := b.ProjectedDraw(node, cfr.Btn, hand, [2]cfr.DrawCounts{}, -1); !ok {
+			t.Fatal("seeded model B rejected draw")
+		}
+	}
+	if !reflect.DeepEqual(aModel.rands, bModel.rands) {
+		t.Fatalf("same seed draw mixes differ: %v / %v", aModel.rands, bModel.rands)
+	}
+}
+
+func TestProjectedDrawUsesLoadedModelWithSortedHand(t *testing.T) {
+	model := &captureDrawModel{keep: 0b00111}
+	b := NewModel(model)
+	node, ok := cfr.ProjectDrawNode(cfr.Draw2, cfr.Btn, cfr.PolicyHistory{}, cfr.BB)
+	if !ok {
+		t.Fatal("missing projection")
+	}
+	hand := cards.MustParse("Kd", "2c", "7s", "4h", "3d")
+	var drawn [2]cfr.DrawCounts
+	for p := range drawn {
+		for street := range drawn[p] {
+			drawn[p][street] = -1
+		}
+	}
+	action, ok := b.ProjectedDraw(node, cfr.Btn, hand, drawn, cfr.BB)
+	if !ok || action.Kind != wire.ActionDiscard {
+		t.Fatalf("action = %+v, ok=%v", action, ok)
+	}
+	wantDiscards := cards.MustParse("7s", "Kd")
+	if !reflect.DeepEqual(action.Cards, wantDiscards) {
+		t.Fatalf("discards = %v, want %v", action.Cards, wantDiscards)
+	}
+	if model.view.Node != node || model.view.Seat != cfr.Btn || model.view.Street != cfr.Draw2 || model.view.LastAggr != cfr.BB {
+		t.Fatalf("view = %+v", model.view)
+	}
+	wantHand := cards.MustParse("2c", "3d", "4h", "7s", "Kd")
+	if !reflect.DeepEqual(model.view.Hand[:], wantHand) || model.view.Drawn != drawn {
+		t.Fatalf("view hand/draws = %v/%v, want %v/%v", model.view.Hand, model.view.Drawn, wantHand, drawn)
+	}
+	if model.view.Pot != 0 || model.view.ToCall != 0 || model.view.Wagers != 0 || model.view.Facing || model.view.CanRaise {
+		t.Fatalf("draw carried betting fields: %+v", model.view)
+	}
+}
+
+func TestProjectedDrawRejectsDuplicateOrWrongActor(t *testing.T) {
+	b := NewModel(&captureDrawModel{keep: 31})
+	node, _ := cfr.ProjectDrawNode(cfr.Draw1, cfr.BB, cfr.PolicyHistory{}, -1)
+	duplicate := cards.MustParse("2c", "2c", "4h", "5s", "7d")
+	if _, ok := b.ProjectedDraw(node, cfr.BB, duplicate, [2]cfr.DrawCounts{}, -1); ok {
+		t.Fatal("accepted duplicate hand")
+	}
+	if _, ok := b.ProjectedDraw(node, cfr.Btn, cards.MustParse("2c", "3d", "4h", "5s", "7d"), [2]cfr.DrawCounts{}, -1); ok {
+		t.Fatal("accepted wrong actor")
+	}
+}
 
 func newBot(t *testing.T, seats int) *Bot {
 	t.Helper()

@@ -18,6 +18,30 @@ func setup(hand ...string) *Bot {
 	return b
 }
 
+func TestNewSeededHasReproduciblePrivateMix(t *testing.T) {
+	a, err := NewSeeded(42)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := NewSeeded(42)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c, err := NewSeeded(43)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 8; i++ {
+		av, bv, cv := a.random(), b.random(), c.random()
+		if av != bv {
+			t.Fatalf("same seed diverged at %d: %v != %v", i, av, bv)
+		}
+		if i == 0 && av == cv {
+			t.Fatal("distinct seeds shared their first mix")
+		}
+	}
+}
+
 func TestLegalDecisionsAcrossStreetsAndHands(t *testing.T) {
 	rng := rand.New(rand.NewPCG(9123, 44))
 	b, _ := New()
